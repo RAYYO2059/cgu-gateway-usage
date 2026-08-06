@@ -31,9 +31,13 @@ def _configure_logging(verbose: bool) -> None:
 
 def cmd_extract(args: argparse.Namespace) -> int:
     """00_raw 的 JSON → 01_request 的請求級 parquet。"""
-    logger.info("extract: 讀取 %s", config.DATA_RAW)
-    print("extract: not implemented")
-    return 0
+    from src import extract
+
+    run_id = getattr(args, "run_id", None) or config.new_run_id()
+    logger.info("extract: run_id=%s，來源 %s", run_id, config.DATA_RAW)
+    stats = extract.run(run_id)
+    args.run_id = run_id
+    return 1 if stats["failed"] and not stats["rows"] else 0
 
 
 def cmd_aggregate(args: argparse.Namespace) -> int:
@@ -51,7 +55,11 @@ def cmd_metrics(args: argparse.Namespace) -> int:
 
 
 def cmd_all(args: argparse.Namespace) -> int:
-    """依序執行 extract → aggregate → metrics，任一步失敗即中止。"""
+    """依序執行 extract → aggregate → metrics，任一步失敗即中止。
+
+    三步共用同一個 run_id，快照才會落在同一個 runs/<run_id>/ 底下。
+    """
+    args.run_id = config.new_run_id()
     for step in (cmd_extract, cmd_aggregate, cmd_metrics):
         code = step(args)
         if code != 0:

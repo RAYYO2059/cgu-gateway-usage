@@ -1,3 +1,6 @@
 pandas
 pyarrow
 pandera
+
+# Windows 沒有系統時區資料庫，zoneinfo 需要這個套件才能解析 Asia/Taipei
+tzdata
