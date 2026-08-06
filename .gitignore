@@ -1,0 +1,20 @@
+# --- 資料與敏感檔案 ---
+# 原始日誌與衍生 parquet，體積大且含個資
+data/
+# 執行快照
+runs/
+
+# 帳號對照表，絕對不能推；只放行明確列出的文件檔
+ref/*
+!ref/FIELD_REQUESTS.md
+
+# --- Python ---
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+
+# --- 編輯器與作業系統 ---
+.DS_Store
+.vscode/

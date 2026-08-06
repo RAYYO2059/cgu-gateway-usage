@@ -1,0 +1,10 @@
+# 換行一律 LF 進版控。
+#
+# 開發在 Windows，但 RESULTS.md、INDEX.md 與 docs/data/ 的 csv 都是渲染器產生的，
+# 而且已經驗證過位元級冪等——連跑兩次 --publish 的雜湊完全相同。
+# 若不統一換行，同一份程式在 Linux 上重跑會讓整份檔案在 git diff 裡全變動，
+# 那個冪等保證就只在單一平台上成立，等於沒有。
+* text=auto eol=lf
+
+# 圖是二進位，不做任何換行轉換（轉了會壞檔，而且 PNG 的雜湊是驗收項目之一）
+*.png binary
