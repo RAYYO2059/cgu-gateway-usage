@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import re
+import unicodedata
 from pathlib import Path
 
 import pandas as pd
@@ -32,6 +33,50 @@ _MARKER_TEMPLATE = (
     r".*?"
     r"(?P<end><!-- AUTOGEN:{key}:END -->)"
 )
+
+
+def _is_punct(ch: str) -> bool:
+    """CommonMark 認定的標點：Unicode P* 類，加上幾個 S 類符號。
+
+    中日韓的「。」「，」「」」都算標點，中文字本身不算——這個差別正是下面
+    那道檢查的全部理由。
+    """
+    if not ch:
+        return False
+    return unicodedata.category(ch).startswith("P") or ch in "$+<=>^`|~"
+
+
+def check_bold_delimiters(text: str, label: str) -> None:
+    """擋掉在中文裡不會生效的 `**粗體**`。
+
+    CommonMark 規定收尾的 `**` 必須是 right-flanking：前面若是標點，後面就得是
+    空白或標點。中文寫成 `**這是重點。**接下來` 時，收尾的 `**` 前面是「。」、
+    後面是「接」——兩個條件都不滿足，於是它不能收尾，反而被當成新的開頭。
+    結果是整段粗體範圍歪掉，或者 `**` 直接以字面印在頁面上。
+
+    這種錯在原始碼裡看起來完全正常，只有在 GitHub 上才看得出來，而且我們是
+    等到讀者回報才發現的。所以改成產生文件時就當場失敗——理由與
+    check_columns_match() 相同：靠人眼複查會漏，靠機器複查不會。
+
+    修法是把句號移到粗體外面：`**這是重點**。接下來`。顯示出來的字一模一樣，
+    差別只在句號算不算粗體的一部分。
+    """
+    bad: list[str] = []
+    for n, line in enumerate(text.splitlines(), 1):
+        runs = [m.start() for m in re.finditer(r"\*\*", line)]
+        # 由左到右兩兩配對＝作者的原意；偶數位那個是原意的「收尾」。
+        for close in runs[1::2]:
+            prev = line[close - 1] if close > 0 else ""
+            nxt = line[close + 2] if close + 2 < len(line) else ""
+            if _is_punct(prev) and nxt and not nxt.isspace() and not _is_punct(nxt):
+                bad.append(f"  L{n}：…{line[max(0, close - 20):close]}[**]{line[close + 2:close + 12]}…")
+    if bad:
+        raise ValueError(
+            f"{label} 有 {len(bad)} 處粗體在 GitHub 上不會生效"
+            "（收尾的 ** 前面是標點、後面不是標點或空白）：\n"
+            + "\n".join(bad)
+            + "\n把句號移到 ** 外面即可：**這是重點**。接下來"
+        )
 
 
 def latest_summary() -> pd.DataFrame | None:
@@ -238,7 +283,7 @@ def build_highlights_block() -> str:
     if cache is not None and len(cache) >= 3:
         rows = cache.set_index("分組")
         lines.append(
-            f"- **快取的位置效應非常乾淨。**一個 turn 內第 1 個請求的中位快取率是 "
+            f"- **快取的位置效應非常乾淨**。一個 turn 內第 1 個請求的中位快取率是 "
             f"**{rows.loc['1st', 'p50']:.0f}**"
             f"（{100 * float(rows.loc['1st', 'zero_cache_share']):.1f}% 完全沒命中），"
             f"第 2 個跳到 **{100 * float(rows.loc['2nd', 'p50']):.1f}%**，"
@@ -257,7 +302,7 @@ def build_highlights_block() -> str:
             if len(n):
                 hits = f"有 {int(n.iloc[0])} 筆請求撞到上下文長度上限。"
         lines.append(
-            f"- **prompt 大多很短。**全體中位數 {whole['p50']:,.0f} 字元，"
+            f"- **prompt 大多很短**。全體中位數 {whole['p50']:,.0f} 字元，"
             f"但 p90 是 {whole['p90']:,.0f}、最長一筆 {whole['max']:,.0f} 字元。{hits}"
         )
 
@@ -267,7 +312,7 @@ def build_highlights_block() -> str:
         errors = int(summary.loc["error_4xx_5xx", "n_requests"])
         total = errors + int(summary.loc["success_2xx", "n_requests"])
         lines.append(
-            f"- **錯誤極少。**{errors:,} / {total:,}。"
+            f"- **錯誤極少**。{errors:,} / {total:,}。"
             "400 全部是客戶端送錯參數，不是服務故障；唯一的 520 是上游異常。"
         )
 
@@ -303,6 +348,9 @@ def render_readme() -> bool:
     updated = replace_block(original, "DATA", build_data_block())
     updated = replace_block(updated, "METRICS", build_metrics_block())
     updated = replace_block(updated, "HIGHLIGHTS", build_highlights_block())
+    # 檢查放在「有沒有變動」之前：已經在檔案裡的壞粗體也要被抓出來，
+    # 不能因為這次剛好沒改到就放行。
+    check_bold_delimiters(updated, "README.md")
     if updated == original:
         return False
     README_PATH.write_text(updated, encoding="utf-8")
@@ -312,6 +360,7 @@ def render_readme() -> bool:
 def render_index() -> bool:
     config.DOCS_DIR.mkdir(parents=True, exist_ok=True)
     body = build_index()
+    check_bold_delimiters(body, "docs/INDEX.md")
     if INDEX_PATH.exists() and INDEX_PATH.read_text(encoding="utf-8") == body:
         return False
     INDEX_PATH.write_text(body, encoding="utf-8")

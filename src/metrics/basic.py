@@ -271,7 +271,7 @@ def requests_by_endpoint(tables: dict) -> MetricResult:
         "『請求的模型 ≠ 回傳的模型』的比率會顯示為 57.96%，"
         "剝除版本後實際只有 0.01%（9,935 筆中僅 1 筆真正被替換）。"
         "這個欄位回答『誰在服務』，不回答『使用者選了什麼』——後者要看 model_requested。"
-        "**request_share 的分母是 9,935（有 model_family 的請求）不是 9,937。**"
+        "**request_share 的分母是 9,935（有 model_family 的請求）不是 9,937**。"
         "表尾的 `(未記錄)` 一列是 model_family 為 null 的 2 筆，"
         "計數照列但不出比例——它不屬於任何模型族，放進分母會讓其他列的比例失真。"
         "因此比例欄加總為 1.0000，計數欄加總為 9,937。"
@@ -446,7 +446,7 @@ def status_and_errors(tables: dict) -> MetricResult:
     source="user",
     denominator="43 個 account_type=student 的 username",
     caveat=(
-        "**只回答「有誰在用」，不回答「誰用得多」。**"
+        "**只回答「有誰在用」，不回答「誰用得多」**。"
         "幾乎所有分組都會觸發抑制（母數 < 10 或單人佔比 > 30%），"
         "比例欄位大量為 NA，這是預期行為而非計算失敗。"
         "degree/entry_year 來自 user_account 的可見前綴，"
@@ -485,7 +485,7 @@ def users_by_degree_and_entry_year(tables: dict) -> MetricResult:
     source="request",
     denominator="7,115 個 client_type=codex 的請求（direct 客戶端不帶這個參數）",
     caveat=(
-        "**這是客戶端預設值的分布，不是使用者偏好的分布。**"
+        "**這是客戶端預設值的分布，不是使用者偏好的分布**。"
         "同一批請求的 include_options 唯一值只有一個"
         "（reasoning.encrypted_content，7,115 筆全同、覆蓋率 71.6% 與 codex 請求數完全吻合），"
         "顯示沒有任何使用者調整過推理相關設定。"
@@ -532,7 +532,7 @@ def reasoning_effort_distribution(tables: dict) -> MetricResult:
         "（c）缺失非隨機：沒有 tool_types 的請求集中在 subagent 與"
         "標題生成之類的輔助呼叫，這些本來就不掛工具，"
         "所以「沒有工具的 thread 比例」不能解讀成「使用者不用工具」。"
-        "（d）**比例的分母是有工具宣告的 thread，不是全部 thread。**"
+        "（d）**比例的分母是有工具宣告的 thread，不是全部 thread**。"
         "欄名為此改成 declared_thread_share。"
         "function 的 share = 1.0 意思是「所有**有宣告**的 thread 都掛了 function」，"
         "不是「所有 thread 都掛了 function」——後者的分母大了 2.35 倍。"

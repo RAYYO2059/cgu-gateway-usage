@@ -453,6 +453,9 @@ def render_results(run_id: str) -> dict:
     for key in unknown:
         logger.warning("RESULTS.md 的 AUTOGEN:%s 沒有對應的指標，未填入", key)
 
+    from src import render_index
+    render_index.check_bold_delimiters(text, "docs/RESULTS.md")
+
     changed = text != original
     if changed:
         RESULTS_PATH.write_text(text, encoding="utf-8")

@@ -53,7 +53,7 @@ def _quantile_rows(series: pd.Series, label: str, extra: dict | None = None) -> 
     source="turn",
     denominator="1,025 個 turn_id 非 null 的 turn（direct 客戶端沒有 turn，不計入）",
     caveat=(
-        "**不是效能指標也不是成本指標。**展開深度高只代表 agent 往返多，"
+        "**不是效能指標也不是成本指標**。展開深度高只代表 agent 往返多，"
         "不代表使用者等待久或花費高。"
         "務必看 p50 而非 mean：mean=6.94 但 p50=1，"
         "一半的使用者動作只產生一個請求，平均值被長尾嚴重拉高。"
@@ -103,7 +103,7 @@ def turn_expansion_depth(tables: dict) -> MetricResult:
     source="thread",
     denominator="435 個 thread，比值 =（peak - user - assistant）/ peak",
     caveat=(
-        "**這是訊息「數量」的比例，不是時間比例也不是成本比例。**"
+        "**這是訊息「數量」的比例，不是時間比例也不是成本比例**。"
         "一則工具訊息可能只有幾個 token，一則使用者訊息可能有幾千個，"
         "不可據此推論 agent 消耗了七成資源。"
         + PEAK_CAVEAT
@@ -136,7 +136,7 @@ def thread_tool_message_ratio(tables: dict) -> MetricResult:
         "依 turn 內時間序分成第 1、第 2、第 3 個以後"
     ),
     caveat=(
-        "**這是協定層的機制特性，不是使用者行為差異。**"
+        "**這是協定層的機制特性，不是使用者行為差異**。"
         "第一個請求快取率低是因為前綴尚未被快取，"
         "與該使用者「用得好不好」無關，不可拿來比較人或族群。"
         "這個指標不依賴樣本量，1.8 天的資料也足以觀察機制。"
@@ -194,7 +194,7 @@ def cache_hit_by_request_position(tables: dict) -> MetricResult:
         "比值 = prompt_tokens /（prompt_tokens - cached_tokens）"
     ),
     caveat=(
-        "**用來說明「原始 token 數會高估實際資源消耗」，不是計費依據。**"
+        "**用來說明「原始 token 數會高估實際資源消耗」，不是計費依據**。"
         "快取命中的 token 仍會出現在 prompt_tokens 裡，"
         "直接加總 prompt_tokens 會把同一段前綴重複計算數十次。"
         "分母為 0（完全命中快取）的請求無法計算比值，已排除並記在 n_excluded_zero_denominator。"
@@ -251,7 +251,7 @@ def token_inflation_by_client_type(tables: dict) -> MetricResult:
     source="request",
     denominator="全部 9,937 個請求中 usage_missing=True 的 188 筆",
     caveat=(
-        "**這 188 筆的 token 是「遺失」不是「0」。**"
+        "**這 188 筆的 token 是「遺失」不是「0」**。"
         "其中 102 筆是 status=200 的串流請求，total_tokens 全部記成 0——"
         "直接 sum(total_tokens) 會把它們當成零消耗而低估總量。"
         "所有 token 加總都應排除這些列，並在結果中註明排除筆數。"
@@ -372,7 +372,7 @@ def prompt_length_distribution(tables: dict) -> MetricResult:
     source="request",
     denominator="error_code = context_length_exceeded 的 47 筆請求",
     caveat=(
-        "**母數只有 47 筆，只做描述、不出任何比例。**"
+        "**母數只有 47 筆，只做描述、不出任何比例**。"
         "不可據此估算「多少比例的使用者會撞到上限」，"
         "也不可拿來比較模型或族群——樣本量不支持任何比較。"
         "這些請求被拒絕於模型之前，usage_details 為空，"
@@ -427,14 +427,14 @@ def context_length_exceeded_profile(tables: dict) -> MetricResult:
     source="request",
     denominator="model_returned 與 response_model 兩欄都有值的請求",
     caveat=(
-        "**這是資料勾稽，不是服務品質指標。**"
+        "**這是資料勾稽，不是服務品質指標**。"
         "現有的『模型替換率 0.01%』是拿 gateway 自己的 model_requested 與 "
         "model_returned 相比得出的——兩欄都由同一段程式寫入，"
         "若那段程式有系統性錯誤，比對結果會一致地錯，從數字上看不出來。"
         "response_model 來自回應摘要，是目前唯一能獨立佐證的第三個欄位。"
         "怎麼讀：兩者完全一致，代表 gateway 忠實轉發，"
         "原本的替換率數字可以採信；出現不一致，那個差異才是真正需要追的替換。"
-        "**最重要的限制：這個檢查涵蓋不到 Codex 流量。**"
+        "**最重要的限制：這個檢查涵蓋不到 Codex 流量**。"
         "response_model 只出現在 1,958 筆請求上（全體的 19.7%），"
         "而且**全部都是 direct 客戶端**——7,115 筆 codex 請求無一有這個欄位。"
         "因此即使一致率 100%，能佐證的也只有直呼那一段；"
@@ -551,7 +551,7 @@ def _describe_cadence(timestamps: pd.Series) -> str:
         f"{100 * ANOMALY_DOMINANT:.0f}% 時列出。"
     ),
     caveat=(
-        "**這張表描述行為特徵，不指名個人。**輸出不含 username，"
+        "**這張表描述行為特徵，不指名個人**。輸出不含 username，"
         "也不含任何能直接還原到帳號的欄位。"
         "要把某一列對應到具體帳號，請查 `ref/user_registry.csv`——"
         "該檔不進版控，且需要另外的授權。"
