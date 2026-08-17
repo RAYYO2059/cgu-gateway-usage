@@ -105,7 +105,7 @@ python -m src.run audit      # 欄位稽核：原始 JSON 有但沒抽的欄位�
 
 ## 這個 repo 沒有原始資料
 
-`data/00_raw/` 是空的，也不會有東西——原始日誌含個資，整個 `data/` 都在 `.gitignore` 裡。所以 clone 下來直接跑 `python -m src.run all` 不會報錯，但也不會產出任何統計：它會掃到零個檔案然後結束。
+`data/00_raw/` 是空的，也不會有東西——原始日誌含個資，整個 `data/` 都在 `.gitignore` 裡。所以 clone 下來直接跑 `python -m src.run all` 會在驗證那一步停下來，告訴你 `data/01_request` 沒有資料、要先把日誌放進 `data/00_raw/`，然後以錯誤碼結束。這是預期行為，不是壞掉。
 
 要真的重跑，得自己把 gateway 的 log 放進 `data/00_raw/<日期>/`，一個請求一個 JSON 檔。`ref/user_registry.csv` 同理，那是 `validate` 階段自己生出來的，不進版控。
 

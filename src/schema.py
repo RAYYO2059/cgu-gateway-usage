@@ -321,8 +321,19 @@ def run_warning_checks(frame: pd.DataFrame) -> list[str]:
 # 入口
 # ---------------------------------------------------------------------------
 def load_dataset() -> pd.DataFrame:
-    """讀回 L1 輸出。分區鍵回讀是 category（值存在目錄名裡），統一成 string。"""
+    """讀回 L1 輸出。分區鍵回讀是 category（值存在目錄名裡），統一成 string。
+
+    沒有資料時明講。這個 repo 不含原始日誌，所以剛 clone 下來直接跑 all
+    一定會走到這裡；讓它拋 KeyError: 'date_taipei' 的話，第一次用的人
+    看到的是一段 pandas 的堆疊，而真正的原因是 data/00_raw/ 是空的。
+    """
     frame = pd.read_parquet(config.DATA_REQUEST)
+    if frame.empty or "date_taipei" not in frame.columns:
+        raise FileNotFoundError(
+            f"{config.DATA_REQUEST} 沒有資料。"
+            f"請先把 gateway 日誌放進 {config.DATA_RAW}（一個請求一個 JSON 檔）"
+            "再跑 extract。原始資料不隨 repo 發布。"
+        )
     frame["date_taipei"] = frame["date_taipei"].astype("string")
     return frame
 
