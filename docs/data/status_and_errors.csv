@@ -1,0 +1,17 @@
+﻿類別,值,n_requests,n_users
+status_code,200,9851,98
+status_code,400,84,6
+status_code,404,1,1
+status_code,520,1,1
+status_code,429,0,0
+status_code,402,0,0
+status_code,403,0,0
+error_code,context_length_exceeded,47,1
+error_code,invalid_value,18,2
+error_code,unsupported_parameter,8,3
+error_code,invalid_json_schema,2,1
+error_code,unknown_parameter,2,1
+error_code,missing_required_parameter,2,1
+error_code,(無),7,3
+彙總,success_2xx,9851,98
+彙總,error_4xx_5xx,86,7

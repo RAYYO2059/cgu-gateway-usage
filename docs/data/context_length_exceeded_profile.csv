@@ -1,0 +1,16 @@
+﻿類別,值,n,備註
+彙總,n_requests,47,
+彙總,n_users,1,
+彙總,n_usage_missing,47,usage_details 為空，token 欄位不可信
+model_family,gpt-5-chat-latest,47,
+error_param,messages,47,
+endpoint,/v1/chat/completions,47,
+client_type,direct,47,
+prompt_len 字元,p50,150029,
+prompt_len 字元,p90,150029,
+prompt_len 字元,min,1894,
+prompt_len 字元,max,900179,
+prompt_tokens（不可信）,p50,0,
+prompt_tokens（不可信）,p90,0,
+prompt_tokens（不可信）,min,0,
+prompt_tokens（不可信）,max,0,

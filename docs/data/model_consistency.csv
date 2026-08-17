@@ -1,0 +1,15 @@
+﻿項目,n,佔比,備註
+n_requests（全體）,9937,1.0,
+response_model 有值,1958,0.197,缺值代表該請求沒有回應摘要（多為錯誤或非對話端點）
+兩欄皆有值（可比對）,1958,0.197,
+原字串完全一致,1958,1.0,含版本後綴
+模型族一致,1958,1.0,剝除 -YYYY-MM-DD 後綴後比對
+模型族不一致,0,0.0,這才是真正的模型替換
+可比對範圍：client_type=codex,0,0.0,該組共 7115 筆，**完全無法比對**
+可比對範圍：client_type=direct,1958,0.6938,該組共 2822 筆
+可比對範圍：endpoint=/v1/audio/speech,0,0.0,該組共 233 筆，**完全無法比對**
+可比對範圍：endpoint=/v1/audio/transcriptions,0,0.0,該組共 59 筆，**完全無法比對**
+可比對範圍：endpoint=/v1/chat/completions,1878,0.7822,該組共 2401 筆
+可比對範圍：endpoint=/v1/images/edits,0,0.0,該組共 1 筆，**完全無法比對**
+可比對範圍：endpoint=/v1/images/generations,0,0.0,該組共 6 筆，**完全無法比對**
+可比對範圍：endpoint=/v1/responses,80,0.0111,該組共 7237 筆

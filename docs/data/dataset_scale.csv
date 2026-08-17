@@ -1,0 +1,13 @@
+﻿項目,值,備註
+n_requests,9937.0,
+n_turns,1025.0,
+n_threads,435.0,
+n_users,98.0,
+n_days,3.0,
+n_columns,89.0,
+requests_on_2026-07-21,3336.0,週二（weekday_taipei=1）、60 人
+requests_on_2026-07-22,4802.0,週三（weekday_taipei=2）、70 人
+requests_on_2026-07-23,1799.0,週四（weekday_taipei=3）、11 人
+codex 請求無 turn_id,4.0,3 個 thread、3 人；全部 endpoint=/v1/responses、status=200、text_format_name=codex_output_schema；同形狀的請求另有 18 筆帶著 turn_id，故『缺 turn_id』本身無規律，未併入任何 turn
+ts_first,,2026-07-21 13:20:13.625759+08:00
+ts_last,,2026-07-23 07:56:46.130025+08:00

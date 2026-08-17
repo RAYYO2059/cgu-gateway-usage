@@ -1,0 +1,8 @@
+﻿tool_type,n_threads,n_users,declared_thread_share
+function,185,54,1.0
+custom,183,53,0.9892
+tool_search,177,53,0.9568
+web_search,142,54,0.7676
+namespace,113,46,0.6108
+（分母）有工具宣告的 thread,185,54,
+（分母）無 tool_types 欄位的 thread,250,53,

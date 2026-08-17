@@ -1,0 +1,3 @@
+﻿client_type,n_requests,n_users,n_threads,n_turns,request_share,suppression_reason
+codex,7115,76,435,1025,0.716,
+direct,2822,25,0,0,,client_type：單人佔 61.0% > 30%

@@ -1,0 +1,4 @@
+﻿account_type,n_users,n_requests,n_threads,n_turns,request_share,user_share,suppression_reason
+student,43,4175,109,255,,,account_type：單人佔 41.2% > 30%
+staff,44,3587,197,465,0.361,0.449,
+service,11,2175,129,305,0.2189,0.1122,

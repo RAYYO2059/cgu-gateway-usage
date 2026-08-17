@@ -1,12 +1,24 @@
 # --- 資料與敏感檔案 ---
-# 原始日誌與衍生 parquet，體積大且含個資
-data/
+# 原始日誌與衍生 parquet，體積大且含個資。
+#
+# 前導斜線是必要的：不加的話 gitignore 會比對「任何深度的 data 目錄」，
+# 連 docs/data/（精選 csv，要進版控）都會被一起擋掉——
+# 而且被 gitignore 擋掉的檔案不會出現在 git status，
+# 你會以為推上去了，實際上沒有。
+/data/
 # 執行快照
 runs/
 
 # 帳號對照表，絕對不能推；只放行明確列出的文件檔
 ref/*
 !ref/FIELD_REQUESTS.md
+# ref/ 是 pipeline 的輸出目錄之一，空目錄要進版控才有 .gitkeep；
+# 但 ref/* 會把 .gitkeep 自己也擋掉，於是它完全不生效。
+# 明確放行，與 docs/.gitkeep 的處理一致。
+!ref/.gitkeep
+
+# 設計筆記：B 文件的素材，含尚未定稿的判斷與具體數字，不推 GitHub
+docs/DESIGN_NOTES.md
 
 # --- Python ---
 __pycache__/
@@ -18,3 +30,7 @@ venv/
 # --- 編輯器與作業系統 ---
 .DS_Store
 .vscode/
+# Claude Code 的本機權限設定，逐台機器不同。
+# 多數人的全域 gitignore 已經擋掉它，但那條規則跟著機器不跟著專案：
+# 換一台機器或別人 clone 之後它會突然變成未追蹤檔冒出來。
+.claude/settings.local.json

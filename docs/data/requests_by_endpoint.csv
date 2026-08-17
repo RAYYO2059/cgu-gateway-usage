@@ -1,0 +1,7 @@
+﻿endpoint,n_requests,n_users,n_threads,request_share,suppression_reason
+/v1/responses,7237,83,435,0.7283,依政策豁免抑制（此維度分的是請求不是人）
+/v1/chat/completions,2401,17,0,0.2416,依政策豁免抑制（此維度分的是請求不是人）
+/v1/audio/speech,233,3,0,0.0234,依政策豁免抑制（此維度分的是請求不是人）
+/v1/audio/transcriptions,59,2,0,0.0059,依政策豁免抑制（此維度分的是請求不是人）
+/v1/images/generations,6,2,0,0.0006,依政策豁免抑制（此維度分的是請求不是人）
+/v1/images/edits,1,1,0,0.0001,依政策豁免抑制（此維度分的是請求不是人）

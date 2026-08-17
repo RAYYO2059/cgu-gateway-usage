@@ -1,0 +1,5 @@
+﻿reasoning_effort,n_requests,n_users,n_turns,request_share,suppression_reason
+medium,4890,66,678,0.6873,依政策豁免抑制（此維度分的是請求不是人）
+high,980,11,61,0.1377,依政策豁免抑制（此維度分的是請求不是人）
+low,647,63,238,0.0909,依政策豁免抑制（此維度分的是請求不是人）
+xhigh,598,9,48,0.084,依政策豁免抑制（此維度分的是請求不是人）

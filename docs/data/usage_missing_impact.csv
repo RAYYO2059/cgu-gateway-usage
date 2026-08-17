@@ -1,0 +1,16 @@
+﻿類別,值,n_requests,佔全體請求,n_users
+彙總,usage_missing 總筆數,188,0.0189,22.0
+彙總,其中 status=200（token 真正遺失）,102,0.0103,18.0
+彙總,其中 status>=400（沒送到模型，無用量屬正常）,86,0.0087,7.0
+endpoint,/v1/chat/completions,134,0.0135,
+endpoint,/v1/responses,52,0.0052,
+endpoint,/v1/images/generations,1,0.0001,
+endpoint,/v1/images/edits,1,0.0001,
+status_code,200,102,0.0103,
+status_code,400,84,0.0085,
+status_code,404,1,0.0001,
+status_code,520,1,0.0001,
+stream,True,179,0.018,
+stream,False,9,0.0009,
+provider,openai,170,0.0171,
+provider,ollama,18,0.0018,
