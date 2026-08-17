@@ -12,6 +12,7 @@ from __future__ import annotations
 import csv
 import json
 import logging
+import re
 import time
 from collections.abc import Iterator, Sequence
 from datetime import date, datetime, timezone
@@ -39,9 +40,21 @@ except Exception as exc:  # pragma: no cover - 環境問題，不是邏輯問題
 
 UTC = timezone.utc
 
-# 空字串等同缺失的欄位：來自不帶對話 ID 的直呼客戶端。
-# 若保留空字串，後續 groupby 會把它們全部歸成同一個假群組，而 dropna() 攔不到。
-_BLANK_AS_NULL = ("thread_id", "turn_id", "parent_thread_id")
+# 空字串轉 None 的欄位清單。判準是「空字串代表什麼」，不是「哪些欄位有空字串」：
+#
+#   ID 類欄位（此清單）—— 空字串是 sentinel。來自不帶對話 ID 的直呼客戶端，
+#   語意等同「這次請求沒有這個 ID」。若保留原樣，groupby 會把成千上萬筆
+#   不相干的請求併成同一個假群組，而 dropna() 攔不到空字串，是靜默錯誤。
+#
+#   狀態類欄位（noise_category、client.originator、user_agent 等）—— 空字串
+#   是有意義的值，代表「已判定，結果為空/無」，與「沒有這個欄位」不同。
+#   一律原樣保留，不進這份清單。
+_BLANK_AS_NULL = ("thread_id", "session_id", "turn_id", "parent_thread_id")
+
+# 模型名尾端的版本日期後綴，如 gpt-5.4-mini-2026-03-17 → gpt-5.4-mini。
+# 不剝掉會怎樣：同一個模型的不同快照被當成不同模型，
+# 「請求的模型 vs 實際服務的模型」比對會把版本標註誤判成模型替換。
+_MODEL_DATE_SUFFIX = re.compile(r"-\d{4}-\d{2}-\d{2}$")
 
 MANIFEST_PATH = config.MANIFEST_DIR / "processed.parquet"
 MANIFEST_COLUMNS = (
@@ -55,30 +68,39 @@ MANIFEST_COLUMNS = (
 # 輸出欄位順序。date_taipei 會被 pyarrow 抽出去當分區鍵。
 COLUMNS: tuple[str, ...] = (
     # 來源
-    "source_path", "source_file", "request_id",
+    "source_path", "source_file", "source_file_original", "request_id",
     # 時間
     "ts_utc", "ts_taipei", "date_taipei", "hour_taipei", "weekday_taipei",
+    "ts_created_utc", "ts_created_taipei", "log_lag_ms",
     # 身分
     "username", "user_account",
     # 請求
     "endpoint", "method", "status_code", "stream", "latency_ms",
     # 模型
-    "provider", "worker", "model_requested", "model_returned",
+    "provider", "worker", "model_requested", "model_returned", "model_family",
+    "response_model",
     # 用戶端
-    "originator", "user_agent", "host", "remote_addr",
+    "originator", "user_agent", "host", "remote_addr", "client_type",
     # 對話
     "thread_id", "session_id", "turn_id", "parent_thread_id", "conversation_key",
     # 用量
     "prompt_tokens", "completion_tokens", "total_tokens",
     "cached_tokens", "cache_write_tokens", "reasoning_tokens",
+    "input_text_tokens", "input_audio_tokens", "input_image_tokens",
+    "output_text_tokens", "output_audio_tokens", "output_image_tokens",
+    "accepted_prediction_tokens", "rejected_prediction_tokens", "usage_missing",
     # 請求參數
-    "tool_choice", "parallel_tool_calls", "store", "prompt_cache_key",
+    "tool_choice", "parallel_tool_calls", "store", "prompt_cache_key", "temperature",
     "tool_count", "tool_types", "instructions_length",
     "reasoning_effort", "reasoning_summary", "reasoning_context",
     "text_verbosity", "text_format_name",
     "client_metadata_keys", "max_completion_tokens", "max_tokens",
+    "include_options", "request_stream_option",
     # 回應
-    "sse_bytes", "content_type", "truncated", "finish_reasons", "error_type",
+    "sse_bytes", "content_type", "truncated", "finish_reasons",
+    "error_type", "error_code", "error_param",
+    # 影像請求（image_request 幾乎全為空 dict，只有極少數請求有內容）
+    "image_model", "image_n", "image_quality", "image_size",
     # 內容長度（原文不進表）
     "prompt_len", "assistant_response_len", "memory_len",
     # 訊息
@@ -90,34 +112,207 @@ COLUMNS: tuple[str, ...] = (
     "pipeline_version", "ingested_at",
 )
 
+# 輸出欄位 → 來源 JSON 路徑。給 audit.py 做雙向稽核用：
+#   正向：原始 JSON 有、這裡沒宣告的路徑 → 上游新增了欄位而我們靜默忽略。
+#   反向：這裡宣告了、原始 JSON 沒有的路徑 → 上游移除了欄位，或這是死路徑。
+#
+# 一欄多路徑代表 _first() 的 fallback 順序（攤平版優先、巢狀版次之）。
+# 純衍生欄位標 DERIVED，不參與比對——它們沒有對應的來源路徑，
+# 硬要比對只會在兩個方向都產生假警報。
+#
+# 這份對照表必須與 flatten() 手動同步。audit.py 會檢查它與 COLUMNS 的鍵一致，
+# 但檢查不到「路徑寫錯成另一個存在的路徑」——那只能靠 review。
+DERIVED: tuple[str, ...] = ()
+
+COLUMN_SOURCE_MAP: dict[str, tuple[str, ...]] = {
+    # 來源
+    "source_path": DERIVED,              # 由檔案位置決定
+    "source_file": DERIVED,              # 由檔案位置決定
+    "source_file_original": ("source_file",),
+    "request_id": ("request.request_id",),
+    # 時間
+    "ts_utc": ("time.received_at",),
+    "ts_taipei": DERIVED,
+    "date_taipei": DERIVED,
+    "hour_taipei": DERIVED,
+    "weekday_taipei": DERIVED,
+    "ts_created_utc": ("time.created_at",),
+    "ts_created_taipei": DERIVED,
+    "log_lag_ms": DERIVED,
+    # 身分
+    "username": ("identity.username",),
+    "user_account": ("identity.user_account",),
+    # 請求
+    "endpoint": ("request.endpoint",),
+    "method": ("request.method",),
+    "status_code": ("request.status_code",),
+    "stream": ("request.stream",),
+    "latency_ms": ("request.latency_ms",),
+    # 模型
+    "provider": ("model.provider",),
+    "worker": ("model.worker",),
+    "model_requested": ("model.model_requested",),
+    "model_returned": ("model.model_returned",),
+    "model_family": DERIVED,
+    # 第三個模型欄位，位於回應摘要而非 model 區塊。抽它的唯一理由是
+    # 它與 model.model_returned 來自不同的上游環節，可以互相勾稽——
+    # 現有的「模型替換率」是拿 gateway 自己的兩個欄位比出來的，無法自我驗證。
+    "response_model": ("response_summary.model",),
+    # 用戶端
+    "originator": ("client.originator",),
+    "user_agent": ("client.user_agent",),
+    "host": ("client.host",),
+    "remote_addr": ("client.remote_addr",),
+    "client_type": DERIVED,
+    # 對話
+    "thread_id": ("conversation.thread_id",),
+    "session_id": ("conversation.session_id",),
+    "turn_id": ("conversation.turn_id",),
+    "parent_thread_id": ("conversation.parent_thread_id",),
+    "conversation_key": ("conversation.conversation_key",),
+    # 用量
+    "prompt_tokens": ("usage.prompt_tokens",),
+    "completion_tokens": ("usage.completion_tokens",),
+    "total_tokens": ("usage.total_tokens",),
+    "cached_tokens": (
+        "usage_details.cached_tokens",
+        "usage_details.input_tokens_details.cached_tokens",
+    ),
+    "cache_write_tokens": (
+        "usage_details.cache_write_tokens",
+        "usage_details.input_tokens_details.cache_write_tokens",
+    ),
+    "reasoning_tokens": (
+        "usage_details.reasoning_tokens",
+        "usage_details.output_tokens_details.reasoning_tokens",
+    ),
+    "input_text_tokens": (
+        "usage_details.input_text_tokens",
+        "usage_details.input_tokens_details.text_tokens",
+    ),
+    "input_audio_tokens": (
+        "usage_details.input_audio_tokens",
+        "usage_details.input_tokens_details.audio_tokens",
+    ),
+    "input_image_tokens": (
+        "usage_details.input_image_tokens",
+        "usage_details.input_tokens_details.image_tokens",
+    ),
+    "output_text_tokens": (
+        "usage_details.output_text_tokens",
+        "usage_details.output_tokens_details.text_tokens",
+    ),
+    "output_audio_tokens": (
+        "usage_details.output_audio_tokens",
+        "usage_details.output_tokens_details.audio_tokens",
+    ),
+    "output_image_tokens": (
+        "usage_details.output_image_tokens",
+        "usage_details.output_tokens_details.image_tokens",
+    ),
+    "accepted_prediction_tokens": (
+        "usage_details.accepted_prediction_tokens",
+        "usage_details.output_tokens_details.accepted_prediction_tokens",
+    ),
+    "rejected_prediction_tokens": (
+        "usage_details.rejected_prediction_tokens",
+        "usage_details.output_tokens_details.rejected_prediction_tokens",
+    ),
+    "usage_missing": DERIVED,            # 由 usage_details 是否為空 dict 判定
+    # 請求參數
+    "tool_choice": ("request_options.tool_choice",),
+    "parallel_tool_calls": ("request_options.parallel_tool_calls",),
+    "store": ("request_options.store",),
+    "prompt_cache_key": ("request_options.prompt_cache_key",),
+    "temperature": ("request_options.temperature",),
+    "tool_count": ("request_options.tool_count",),
+    "tool_types": ("request_options.tool_types",),
+    "instructions_length": ("request_options.instructions_length",),
+    "reasoning_effort": ("request_options.reasoning.effort",),
+    "reasoning_summary": ("request_options.reasoning.summary",),
+    "reasoning_context": ("request_options.reasoning.context",),
+    "text_verbosity": ("request_options.text.verbosity",),
+    # .name 這個鍵確實存在（稽核實測 8.3% 的檔有），但值常為 null，
+    # 所以 _first() 多半會落到 .type。兩條都要宣告，否則 .name 會被誤報成未映射。
+    "text_format_name": (
+        "request_options.text.format.name",
+        "request_options.text.format.type",
+    ),
+    "client_metadata_keys": ("request_options.client_metadata_keys",),
+    "max_completion_tokens": ("request_options.max_completion_tokens",),
+    "max_tokens": ("request_options.max_tokens",),
+    "include_options": ("request_options.include",),
+    # request.stream 是 gateway 觀察到的實際串流行為，
+    # request_options.stream 是客戶端送出的參數。兩者不必然相同，分開存才能比對。
+    "request_stream_option": ("request_options.stream",),
+    # 回應
+    "sse_bytes": ("response_summary.meta.bytes",),
+    "content_type": ("response_summary.meta.content_type",),
+    "truncated": ("response_summary.meta.truncated",),
+    "finish_reasons": ("response_summary.finish_reasons",),
+    "error_type": ("response_summary.error.type", "response_summary.error"),
+    "error_code": ("response_summary.error.code",),
+    "error_param": ("response_summary.error.param",),
+    # 影像請求
+    "image_model": ("image_request.model",),
+    "image_n": ("image_request.n",),
+    "image_quality": ("image_request.quality",),
+    "image_size": ("image_request.size",),
+    # 內容長度（只取長度，原文不進表）
+    "prompt_len": ("content.prompt",),
+    "assistant_response_len": ("content.assistant_response",),
+    "memory_len": ("content.memory",),
+    # 訊息
+    "messages_format": ("messages_summary.format",),
+    "message_count": ("messages_summary.message_count",),
+    "user_message_count": ("messages_summary.user_message_count",),
+    "assistant_message_count": ("messages_summary.assistant_message_count",),
+    # 其他
+    "noise_category": ("noise_category",),
+    # 血緣
+    "pipeline_version": DERIVED,
+    "ingested_at": DERIVED,
+}
+
 # 明確指定 dtype，避免某欄在某批次全為 None 時型別漂移，導致 parquet schema 不一致。
 _STRING_COLUMNS = (
-    "source_path", "source_file", "request_id",
+    "source_path", "source_file", "source_file_original", "request_id",
     "username", "user_account", "endpoint", "method",
-    "provider", "worker", "model_requested", "model_returned",
-    "originator", "user_agent", "host", "remote_addr",
+    "provider", "worker", "model_requested", "model_returned", "model_family",
+    "response_model",
+    "originator", "user_agent", "host", "remote_addr", "client_type",
     "thread_id", "session_id", "turn_id", "parent_thread_id", "conversation_key",
     "tool_choice", "prompt_cache_key", "tool_types",
     "reasoning_effort", "reasoning_summary", "reasoning_context",
-    "text_verbosity", "text_format_name", "client_metadata_keys",
-    "content_type", "finish_reasons", "error_type",
+    "text_verbosity", "text_format_name", "client_metadata_keys", "include_options",
+    "content_type", "finish_reasons", "error_type", "error_code", "error_param",
+    "image_model", "image_quality", "image_size", "model_family", "client_type",
     "messages_format", "noise_category", "pipeline_version",
 )
 _INT_COLUMNS = (
-    "hour_taipei", "weekday_taipei",
+    "hour_taipei", "weekday_taipei", "log_lag_ms",
     "status_code", "latency_ms",
     "prompt_tokens", "completion_tokens", "total_tokens",
     "cached_tokens", "cache_write_tokens", "reasoning_tokens",
+    "input_text_tokens", "input_audio_tokens", "input_image_tokens",
+    "output_text_tokens", "output_audio_tokens", "output_image_tokens",
+    "accepted_prediction_tokens", "rejected_prediction_tokens",
     "tool_count", "instructions_length", "max_completion_tokens", "max_tokens",
     "sse_bytes", "prompt_len", "assistant_response_len", "memory_len",
     "message_count", "user_message_count", "assistant_message_count",
+    "image_n",
 )
-_BOOL_COLUMNS = ("stream", "parallel_tool_calls", "store", "truncated")
+_BOOL_COLUMNS = ("stream", "parallel_tool_calls", "store", "truncated", "usage_missing",
+                 "request_stream_option")
+# temperature 在原始資料裡 int/float 混型（0 與 0.3 並存），必須走浮點通道，
+# 走 Int64 會把 0.3 截成 0。
+_FLOAT_COLUMNS = ("temperature",)
 
 DTYPES: dict[str, str] = {
     **{c: "string" for c in _STRING_COLUMNS},
     **{c: "Int64" for c in _INT_COLUMNS},
     **{c: "boolean" for c in _BOOL_COLUMNS},
+    **{c: "Float64" for c in _FLOAT_COLUMNS},
 }
 
 
@@ -185,6 +380,20 @@ def _int(value: Any) -> int | None:
     return None
 
 
+def _float(value: Any) -> float | None:
+    """bool 是 int 的子類，必須先擋掉，否則 True 會變成 1.0。"""
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except ValueError:
+            return None
+    return None
+
+
 def _bool(value: Any) -> bool | None:
     return value if isinstance(value, bool) else None
 
@@ -229,10 +438,38 @@ def flatten(record: dict, source_path: str, ingested_at: datetime) -> dict[str, 
     """把一筆原始請求紀錄攤平成單層 dict。缺失一律 None。"""
     ts_utc = _parse_ts(_get(record, "time.received_at"))
     ts_taipei = ts_utc.astimezone(TAIPEI) if ts_utc else None
+    ts_created_utc = _parse_ts(_get(record, "time.created_at"))
+    ts_created_taipei = ts_created_utc.astimezone(TAIPEI) if ts_created_utc else None
+    # received_at - created_at。兩者缺一即為 None，不補 0。
+    #
+    # 命名注意：這**不是**排隊時間。實測與 latency_ms 的相關係數僅 0.007，
+    # 且偏移集中在 17.5~20.8 秒的窄帶（9,937 筆全為負值），是日誌落地端的
+    # 固定延遲，不是請求在 gateway 內等待的時間。
+    # 保留它的用途是偵測上游架構變動（見 schema.run_warning_checks），
+    # 不可當作效能指標使用。
+    log_lag_ms = (
+        int(round((ts_utc - ts_created_utc).total_seconds() * 1000))
+        if ts_utc and ts_created_utc
+        else None
+    )
+
+    # usage_details 為空 dict（或整個缺席）時為 True。
+    # 這裡直接看原始結構，而不是從 total_tokens==0 且 cached_tokens.isna()
+    # 之類的組合條件反推——那種寫法遲早有人漏掉一個條件而算錯用量。
+    usage_details = record.get("usage_details")
+    usage_missing = not isinstance(usage_details, dict) or not usage_details
+
+    model_returned = _text(_get(record, "model.model_returned"))
+    model_family = (
+        _MODEL_DATE_SUFFIX.sub("", model_returned) if model_returned else None
+    )
 
     row: dict[str, Any] = {
         "source_path": source_path,
+        # source_file 是實際落地的檔名；source_file_original 是 JSON 內自述的檔名，
+        # 兩者不一定相同（落地檔多了 .clean 中綴），分開存才能對得起來源系統。
         "source_file": Path(source_path).name,
+        "source_file_original": _text(record.get("source_file")),
         "request_id": _text(_get(record, "request.request_id")),
 
         "ts_utc": ts_utc,
@@ -240,6 +477,9 @@ def flatten(record: dict, source_path: str, ingested_at: datetime) -> dict[str, 
         "date_taipei": ts_taipei.date() if ts_taipei else None,
         "hour_taipei": ts_taipei.hour if ts_taipei else None,
         "weekday_taipei": ts_taipei.weekday() if ts_taipei else None,
+        "ts_created_utc": ts_created_utc,
+        "ts_created_taipei": ts_created_taipei,
+        "log_lag_ms": log_lag_ms,
 
         "username": _text(_get(record, "identity.username")),
         "user_account": _text(_get(record, "identity.user_account")),
@@ -253,12 +493,16 @@ def flatten(record: dict, source_path: str, ingested_at: datetime) -> dict[str, 
         "provider": _text(_get(record, "model.provider")),
         "worker": _text(_get(record, "model.worker")),
         "model_requested": _text(_get(record, "model.model_requested")),
-        "model_returned": _text(_get(record, "model.model_returned")),
+        "model_returned": model_returned,
+        "model_family": model_family,
+        "response_model": _text(_get(record, "response_summary.model")),
 
         "originator": _text(_get(record, "client.originator")),
         "user_agent": _text(_get(record, "client.user_agent")),
         "host": _text(_get(record, "client.host")),
         "remote_addr": _text(_get(record, "client.remote_addr")),
+        # client_type 在下面依正規化後的 thread_id 決定，這裡先佔位。
+        "client_type": None,
 
         "thread_id": _text(_get(record, "conversation.thread_id")),
         "session_id": _text(_get(record, "conversation.session_id")),
@@ -285,11 +529,53 @@ def flatten(record: dict, source_path: str, ingested_at: datetime) -> dict[str, 
             "usage_details.reasoning_tokens",
             "usage_details.output_tokens_details.reasoning_tokens",
         )),
+        "input_text_tokens": _int(_first(
+            record,
+            "usage_details.input_text_tokens",
+            "usage_details.input_tokens_details.text_tokens",
+        )),
+        "input_audio_tokens": _int(_first(
+            record,
+            "usage_details.input_audio_tokens",
+            "usage_details.input_tokens_details.audio_tokens",
+        )),
+        "input_image_tokens": _int(_first(
+            record,
+            "usage_details.input_image_tokens",
+            "usage_details.input_tokens_details.image_tokens",
+        )),
+        "output_text_tokens": _int(_first(
+            record,
+            "usage_details.output_text_tokens",
+            "usage_details.output_tokens_details.text_tokens",
+        )),
+        "output_audio_tokens": _int(_first(
+            record,
+            "usage_details.output_audio_tokens",
+            "usage_details.output_tokens_details.audio_tokens",
+        )),
+        "output_image_tokens": _int(_first(
+            record,
+            "usage_details.output_image_tokens",
+            "usage_details.output_tokens_details.image_tokens",
+        )),
+        "accepted_prediction_tokens": _int(_first(
+            record,
+            "usage_details.accepted_prediction_tokens",
+            "usage_details.output_tokens_details.accepted_prediction_tokens",
+        )),
+        "rejected_prediction_tokens": _int(_first(
+            record,
+            "usage_details.rejected_prediction_tokens",
+            "usage_details.output_tokens_details.rejected_prediction_tokens",
+        )),
+        "usage_missing": usage_missing,
 
         "tool_choice": _text(_get(record, "request_options.tool_choice")),
         "parallel_tool_calls": _bool(_get(record, "request_options.parallel_tool_calls")),
         "store": _bool(_get(record, "request_options.store")),
         "prompt_cache_key": _text(_get(record, "request_options.prompt_cache_key")),
+        "temperature": _float(_get(record, "request_options.temperature")),
         "tool_count": _count(_get(record, "request_options.tool_count")),
         "tool_types": _join(_get(record, "request_options.tool_types")),
         "instructions_length": _int(_get(record, "request_options.instructions_length")),
@@ -307,6 +593,10 @@ def flatten(record: dict, source_path: str, ingested_at: datetime) -> dict[str, 
         # （/v1/responses 用前者、/v1/chat/completions 用後者），不可合併。
         "max_completion_tokens": _int(_get(record, "request_options.max_completion_tokens")),
         "max_tokens": _int(_get(record, "request_options.max_tokens")),
+        # include 是 list（如 ["reasoning.encrypted_content"]），串成字串保存。
+        # 用來佐證 reasoning_effort 是客戶端預設而非使用者調整過的設定。
+        "include_options": _join(_get(record, "request_options.include")),
+        "request_stream_option": _bool(_get(record, "request_options.stream")),
 
         "sse_bytes": _int(_get(record, "response_summary.meta.bytes")),
         "content_type": _text(_get(record, "response_summary.meta.content_type")),
@@ -317,6 +607,15 @@ def flatten(record: dict, source_path: str, ingested_at: datetime) -> dict[str, 
             "response_summary.error.type",
             "response_summary.error",
         )),
+        # 只取 code 與 param，不取 error.message：訊息會回帶使用者送出的內容片段。
+        # param 是出錯的參數路徑（如 input[1].content[0]），不含內容值。
+        "error_code": _text(_get(record, "response_summary.error.code")),
+        "error_param": _text(_get(record, "response_summary.error.param")),
+
+        "image_model": _text(_get(record, "image_request.model")),
+        "image_n": _int(_get(record, "image_request.n")),
+        "image_quality": _text(_get(record, "image_request.quality")),
+        "image_size": _text(_get(record, "image_request.size")),
 
         "prompt_len": _length(_get(record, "content.prompt")),
         "assistant_response_len": _length(_get(record, "content.assistant_response")),
@@ -335,10 +634,18 @@ def flatten(record: dict, source_path: str, ingested_at: datetime) -> dict[str, 
         "ingested_at": ingested_at,
     }
 
-    # 空字串 sentinel → None（_text 已處理，這裡明確再確認一次語意）
+    # 空字串 sentinel → None。這是唯一做這件事的地方：
+    # _text() 刻意原樣保留空字串，只有 _BLANK_AS_NULL 列出的 ID 欄位的 "" 才代表缺失。
     for key in _BLANK_AS_NULL:
         if row[key] == "":
             row[key] = None
+
+    # client_type 必須在空字串正規化「之後」才算，否則直呼客戶端的 thread_id=""
+    # 會被當成有值，整批被誤標成 codex。
+    # 已驗證 thread_id / turn_id / reasoning_effort / text_verbosity /
+    # parallel_tool_calls / client_metadata_keys / store / prompt_cache_key
+    # 這八欄覆蓋率完全一致（71.6%），是同一組客戶端的指紋，用 thread_id 代表即可。
+    row["client_type"] = "direct" if row["thread_id"] is None else "codex"
 
     return row
 
@@ -404,13 +711,67 @@ def existing_request_ids() -> set[str]:
     return {v for v in table.column("request_id").to_pylist() if v is not None}
 
 
+def partition_dirs() -> list[Path]:
+    """既有輸出的分區目錄（date_taipei=YYYY-MM-DD）。"""
+    if not config.DATA_REQUEST.is_dir():
+        return []
+    return sorted(p for p in config.DATA_REQUEST.glob("date_taipei=*") if p.is_dir())
+
+
+def delete_source_paths(source_paths: set[str], run_id: str) -> int:
+    """從既有輸出移除這些 source_path 的列，回傳刪除列數。
+
+    用於「來源檔重新處理」：檔案 mtime/size 變了代表內容被修正過，
+    舊列必須先移除，新列才寫得進去（否則 request_id 去重會擋掉修正後的資料）。
+
+    parquet 沒有列級刪除，做法是逐分區讀出、濾掉、整份重寫。
+    重寫先落暫存檔再替換，中途失敗不會留下半毀的分區。
+    """
+    if not source_paths:
+        return 0
+
+    removed = 0
+    for part_dir in partition_dirs():
+        stale = sorted(part_dir.glob("*.parquet"))
+        if not stale:
+            continue
+        # 直接以分區目錄為 root 讀取，pyarrow 不會把目錄名當分區鍵，
+        # 讀回來的 schema 剛好就是「不含 date_taipei」的欄位集合。
+        table = pq.read_table(part_dir)
+        column = table.column("source_path").to_pylist()
+        survivors = [i for i, value in enumerate(column) if value not in source_paths]
+        if len(survivors) == len(column):
+            continue
+
+        removed += len(column) - len(survivors)
+        if survivors:
+            tmp = part_dir / f"_rewrite-{run_id}.parquet"
+            pq.write_table(table.take(survivors), tmp)
+            for old in stale:
+                old.unlink()
+            tmp.rename(part_dir / f"part-{run_id}-rewrite.parquet")
+        else:
+            # 整個分區都被移除；留空目錄會讓後續讀取拿到 0 檔案的分區，直接清掉。
+            for old in stale:
+                old.unlink()
+            try:
+                part_dir.rmdir()
+            except OSError:
+                pass
+
+    if removed:
+        logger.info("重新處理：從既有輸出移除 %d 列（來源檔 %d 個）", removed, len(source_paths))
+    return removed
+
+
 def to_frame(rows: list[dict[str, Any]]) -> pd.DataFrame:
     frame = pd.DataFrame(rows, columns=list(COLUMNS))
     for column, dtype in DTYPES.items():
         frame[column] = frame[column].astype(dtype)
-    for column in ("ts_utc", "ingested_at"):
+    for column in ("ts_utc", "ts_created_utc", "ingested_at"):
         frame[column] = pd.to_datetime(frame[column], utc=True)
-    frame["ts_taipei"] = pd.to_datetime(frame["ts_taipei"], utc=True).dt.tz_convert(TAIPEI)
+    for column in ("ts_taipei", "ts_created_taipei"):
+        frame[column] = pd.to_datetime(frame[column], utc=True).dt.tz_convert(TAIPEI)
     return frame
 
 
@@ -454,9 +815,15 @@ def run(run_id: str) -> dict[str, Any]:
         len(files), len(pending), len(files) - len(pending),
     )
 
+    # 已在 manifest 裡卻仍被挑出來的，代表 mtime/size 變過 → 是重新處理而非新檔。
+    known_paths: set[str] = (
+        set() if manifest.empty else set(manifest["source_path"].astype(str))
+    )
+
     rows: list[dict[str, Any]] = []
     errors: list[tuple[str, str, str]] = []
     processed: list[dict[str, Any]] = []
+    reparsed: set[str] = set()
 
     for path in pending:
         relative = rel_path(path)
@@ -469,6 +836,10 @@ def run(run_id: str) -> dict[str, Any]:
             # 單檔失敗不中斷整批
             errors.append((relative, type(exc).__name__, str(exc)[:500]))
             continue
+        # 只有「解析成功」的重處理檔才排定刪除舊列。
+        # 若這次解析失敗就刪掉舊列，會拿一筆暫時性錯誤換掉一筆好資料。
+        if relative in known_paths:
+            reparsed.add(relative)
         stat = path.stat()
         processed.append({
             "source_path": relative,
@@ -478,7 +849,7 @@ def run(run_id: str) -> dict[str, Any]:
             "pipeline_version": config.PIPELINE_VERSION,
         })
 
-    # 去重：批次內先到先留，再擋掉已存在於輸出的 request_id
+    # 去重（第一層）：同批次內重複的 request_id 保留先寫入者
     kept: list[dict[str, Any]] = []
     seen: set[str] = set()
     dup_in_batch = 0
@@ -491,6 +862,11 @@ def run(run_id: str) -> dict[str, Any]:
             seen.add(rid)
         kept.append(row)
 
+    # 重新處理：先移除舊列，再讀既有 request_id。順序不可顛倒，
+    # 否則被取代的舊列會出現在 already 裡，把修正後的新列擋掉。
+    replaced_rows = delete_source_paths(reparsed, run_id)
+
+    # 去重（第二層）：擋掉已存在於輸出的 request_id
     dup_existing = 0
     if kept:
         already = existing_request_ids()
@@ -529,6 +905,7 @@ def run(run_id: str) -> dict[str, Any]:
     logger.info("新處理數     %d", len(processed))
     logger.info("跳過數       %d", len(files) - len(pending))
     logger.info("解析失敗數   %d（明細：%s）", len(errors), error_file)
+    logger.info("重處理檔數   %d（移除舊列 %d）", len(reparsed), replaced_rows)
     logger.info("輸出列數     %d（去重丟棄 %d）", len(kept), dup_in_batch + dup_existing)
     logger.info("分區數       %d", partitions)
     if ts_min is not None:
@@ -547,6 +924,8 @@ def run(run_id: str) -> dict[str, Any]:
         "failed": len(errors),
         "rows": len(kept),
         "partitions": partitions,
+        "reprocessed": len(reparsed),
+        "replaced_rows": replaced_rows,
         "duplicates": dup_in_batch + dup_existing,
         "elapsed_sec": elapsed,
     }
