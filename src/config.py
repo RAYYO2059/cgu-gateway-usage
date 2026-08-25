@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from datetime import datetime
 from pathlib import Path
@@ -25,6 +26,25 @@ REF_DIR = PROJECT_ROOT / "ref"          # 帳號對照表等敏感參照資料
 RUNS_DIR = PROJECT_ROOT / "runs"        # 每次執行的快照
 DOCS_DIR = PROJECT_ROOT / "docs"
 
+# --- lite 資料流 -----------------------------------------------------------
+# lite 是另一套上游匯出（schema ai_platform_request 1.1-lite），欄位路徑、
+# 身分鍵、時間戳語意都與 clean 不同，**兩者不可混在同一組目錄**。
+#
+# 特別是原始檔：clean 的 extract.py 用 DATA_RAW.rglob("*.json") 掃檔，
+# 只要 lite 的 json 落進 data/00_raw/ **底下任何一層**就會被撿走，然後用 clean
+# 的欄位路徑去解析——產出 12 萬列幾乎全 null 的資料，而 request_id 剛好在
+# 兩套 schema 裡都是頂層同名欄位，會有值，schema 驗證未必攔得住。
+#
+# rglob 是從 DATA_RAW 往下遞迴，所以危險的範圍就是 data/00_raw/ 底下；
+# **兄弟目錄掃不到**，這也是 00_raw_lite 取這個位置的理由——名字看起來相鄰，
+# 實際上完全在 rglob 的範圍之外。
+DATA_RAW_LITE = DATA_DIR / "00_raw_lite"    # lite 原始 JSON，00_raw 的兄弟目錄
+DATA_REQUEST_LITE = DATA_DIR / "01_request_lite"
+DATA_AGG_LITE = DATA_DIR / "02_agg_lite"
+MANIFEST_LITE = DATA_DIR / "_manifest_lite"
+
+LITE_RAW_ENV = "CGU_LITE_RAW"
+
 # 需要 ensure_dirs() 建立的目錄，順序即建立順序。
 _MANAGED_DIRS = (
     DATA_DIR,
@@ -35,6 +55,10 @@ _MANAGED_DIRS = (
     REF_DIR,
     RUNS_DIR,
     DOCS_DIR,
+    DATA_RAW_LITE,
+    DATA_REQUEST_LITE,
+    DATA_AGG_LITE,
+    MANIFEST_LITE,
 )
 
 # ---------------------------------------------------------------------------
@@ -57,6 +81,52 @@ def ensure_dirs() -> None:
     """建立專案所需的全部目錄，已存在則略過。"""
     for directory in _MANAGED_DIRS:
         directory.mkdir(parents=True, exist_ok=True)
+
+
+def lite_raw_dir() -> Path:
+    """lite 原始 JSON 的根目錄。
+
+    預設是 data/00_raw_lite/。環境變數 CGU_LITE_RAW 可以覆寫——這批資料
+    約 680 MB，硬碟空間不夠時可以指到外接碟或別的磁碟。
+
+    無論用哪一個，都會擋掉指向 data/00_raw/ 底下的路徑（含任何子目錄）：
+    那是 clean 的 extract.py 用 rglob 遞迴掃描的範圍。
+    """
+    override = os.environ.get(LITE_RAW_ENV, "").strip()
+    path = Path(override).expanduser() if override else DATA_RAW_LITE
+    source = f"環境變數 {LITE_RAW_ENV}" if override else "預設值"
+
+    # 防呆：擋掉 data/00_raw 本身與它底下的任何一層。
+    # 用 Path.relative_to 而不是字串前綴比對——字串比對會把
+    # data/00_raw_lite 誤判成 data/00_raw 的子目錄（前綴剛好相同），
+    # 而那正是本專案實際採用的合法位置。
+    resolved = path.resolve()
+    try:
+        inside = resolved.relative_to(DATA_RAW.resolve())
+    except ValueError:
+        inside = None
+    if inside is not None:
+        raise ValueError(
+            f"{source} 指向 {path}，位於 {DATA_RAW} 底下"
+            f"（相對位置 {inside}）。\n"
+            "clean 的 extract.py 用 DATA_RAW.rglob('*.json') 遞迴掃描那個目錄，"
+            "會把 lite 的 json 一起撿走，再用 clean 的欄位路徑解析，"
+            "產出整批幾乎全 null 的資料——而 request_id 在兩套 schema 裡都是"
+            "頂層同名欄位、會有值，schema 驗證未必攔得住。\n"
+            f"請改放到 {DATA_RAW_LITE}（00_raw 的兄弟目錄，不在 rglob 範圍內）"
+            "或 repo 之外。"
+        )
+
+    if not path.is_dir():
+        raise NotADirectoryError(
+            f"{source} 指向 {path}，但它不是一個目錄。\n"
+            "它應該是 lite 匯出解壓後的根目錄，底下是 YYYY-MM-DD 的日期資料夾。\n"
+            f"  預設位置：    {DATA_RAW_LITE}\n"
+            "  或以環境變數覆寫：\n"
+            f"    PowerShell： $env:{LITE_RAW_ENV} = 'D:\\path\\to\\lite_raw'\n"
+            f"    bash：       export {LITE_RAW_ENV}=/path/to/lite_raw"
+        )
+    return path
 
 
 def new_run_id(now: datetime | None = None) -> str:
