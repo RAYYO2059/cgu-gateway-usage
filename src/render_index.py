@@ -368,7 +368,25 @@ def render_index() -> bool:
     return True
 
 
-def run() -> dict:
+def run(line: str = "clean") -> dict:
+    """渲染 docs/INDEX.md 與 README.md。**只有 clean 這條線可以呼叫。**
+
+    斷言擋在門口而不是靠呼叫端記得：本模組有四處直接讀全域
+    ``registry.REGISTRY``（指標總數、已執行數、分組數），
+    ``list_metrics("clean")`` 那種篩選攔不住它們。實測 lite 的指標一旦被
+    import，「已註冊指標」就從 19 變成 23，而 INDEX.md 與 README.md
+    會被一起改寫——而那兩個檔屬於已發佈的 clean 版本。
+
+    這件事已經真的發生過一次（跑 metrics --line lite 時），所以不留在
+    「呼叫端記得就好」的層級。
+    """
+    if line != "clean":
+        raise ValueError(
+            f"render_index.run() 只能用於 clean，收到 line={line!r}。\n"
+            "INDEX.md 與 README.md 描述的是已發佈的那條線；"
+            "本模組有數處直接讀全域 REGISTRY，其他線的指標會混進計數。\n"
+            "要輸出其他線的文件請另寫 renderer，不要放寬這個限制。"
+        )
     index_changed = render_index()
     readme_changed = render_readme()
     logger.info("docs/INDEX.md %s（%d 個指標）",

@@ -167,7 +167,7 @@ def cmd_metrics(args: argparse.Namespace) -> int:
         # 而 render_index 有數處直接讀全域 REGISTRY，lite 指標一旦被 import
         # 就會混進去（實測會讓「已註冊指標」從 19 變成 23）。
         if getattr(args, "line", "clean") == "clean":
-            render_index.run()
+            render_index.run(line="clean")
         return 0 if (summary["狀態"] == "成功").all() else 1
 
     from src import render_results
