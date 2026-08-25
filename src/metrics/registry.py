@@ -99,6 +99,10 @@ class MetricSpec:
     group_by: list | None
     version: str
     fn: Callable[[dict], MetricResult]
+    # 這個指標屬於哪條資料流。REGISTRY 是全域 dict，兩條線的指標一旦在同一個
+    # 行程裡被 import 就會混在一起——clean 跑 metrics 時會連 lite 的一起跑，
+    # 然後因為缺 turn/thread 表而整批失敗。用 line 把它們分開。
+    line: str = "clean"
 
 
 REGISTRY: dict[str, MetricSpec] = {}
@@ -115,6 +119,7 @@ def metric(
     needs_dedup: bool = False,
     group_by: list | None = None,
     version: str = "1.0",
+    line: str = "clean",
 ):
     """把函數註冊成指標。函數簽名須為 fn(tables: dict) -> MetricResult。"""
 
@@ -139,7 +144,7 @@ def metric(
             name=name, question=question, unit=unit, source=source,
             denominator=denominator, caveat=caveat, needs_dedup=needs_dedup,
             group_by=list(group_by) if group_by else None,
-            version=version, fn=fn,
+            version=version, fn=fn, line=line,
         )
         return fn
 
@@ -149,16 +154,17 @@ def metric(
 # ---------------------------------------------------------------------------
 # 抑制
 # ---------------------------------------------------------------------------
-def find_concentration(run_id: str) -> Path | None:
+def find_concentration(run_id: str, line: str = "clean") -> Path | None:
     """本次 run 的 concentration.csv；沒有就退回最近一次的。
 
     metrics 可以獨立於 aggregate 執行（run_id 不同），此時本次 run 目錄
     底下不會有 concentration.csv。退回最近一次並記 log，比直接放棄抑制安全。
     """
-    current = config.RUNS_DIR / run_id / "concentration.csv"
+    filename = "concentration_lite.csv" if line == "lite" else "concentration.csv"
+    current = config.RUNS_DIR / run_id / filename
     if current.exists():
         return current
-    candidates = sorted(config.RUNS_DIR.glob("*/concentration.csv"))
+    candidates = sorted(config.RUNS_DIR.glob(f"*/{filename}"))
     if not candidates:
         return None
     fallback = candidates[-1]
@@ -180,9 +186,9 @@ def _read_concentration(path: Path) -> pd.DataFrame:
     return rules
 
 
-def load_suppression_rules(run_id: str) -> pd.DataFrame:
+def load_suppression_rules(run_id: str, line: str = "clean") -> pd.DataFrame:
     """回傳 (維度, 分組值) → 是否需抑制。"""
-    path = find_concentration(run_id)
+    path = find_concentration(run_id, line)
     if path is None:
         logger.warning("找不到 concentration.csv，本次不套用抑制規則")
         return pd.DataFrame(columns=_EMPTY_RULES)
@@ -352,8 +358,28 @@ def apply_suppression(
 # ---------------------------------------------------------------------------
 # 執行
 # ---------------------------------------------------------------------------
+def load_tables_lite() -> dict:
+    """組出 lite 的 {"request", "user"} 兩張表。
+
+    lite 沒有 turn/thread：那兩層要靠 turn_id / thread_id 的父子關係組出來，
+    而 lite 匯出只有 thread_id、沒有 turn_id。所以 lite 的指標宣告 source
+    時只能用 "request" 或 "user"。
+    """
+    from src import aggregate_lite, extract_lite
+
+    if not aggregate_lite.USER_LITE_PATH.exists():
+        raise FileNotFoundError(
+            f"缺少 {aggregate_lite.USER_LITE_PATH}，"
+            "請先執行 python -m src.aggregate_lite"
+        )
+    return {
+        "request": extract_lite.load_dataset(),
+        "user": pd.read_parquet(aggregate_lite.USER_LITE_PATH),
+    }
+
+
 def load_tables() -> dict:
-    """組出 {"request", "turn", "thread", "user"} 四張表。"""
+    """組出 clean 的 {"request", "turn", "thread", "user"} 四張表。"""
     from src import aggregate, schema
 
     missing = [p for p in (aggregate.TURN_PATH, aggregate.THREAD_PATH,
@@ -379,5 +405,13 @@ def run_metric(spec: MetricSpec, tables: dict, rules: pd.DataFrame) -> MetricRes
     return apply_suppression(spec, result, rules)
 
 
-def list_metrics() -> list[MetricSpec]:
-    return [REGISTRY[name] for name in sorted(REGISTRY)]
+def list_metrics(line: str | None = None) -> list[MetricSpec]:
+    """已註冊的指標。line 為 None 時回傳全部，否則只回那條線的。
+
+    預設回全部是給「盤點所有指標」這種用途；真正要執行或產生文件時一定要
+    指定 line，否則兩條線會互相污染。
+    """
+    specs = [REGISTRY[name] for name in sorted(REGISTRY)]
+    if line is None:
+        return specs
+    return [s for s in specs if s.line == line]

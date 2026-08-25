@@ -18,9 +18,14 @@ SUMMARY_COLUMNS = (
 )
 
 
-def run_all(run_id: str, only: str | None = None) -> pd.DataFrame:
-    """執行指標並寫出 csv。回傳 summary。"""
-    specs = registry.list_metrics()
+def run_all(run_id: str, only: str | None = None,
+            line: str = "clean") -> pd.DataFrame:
+    """執行某一條線的指標並寫出 csv。回傳 summary。
+
+    line 必須指定（預設 clean）：REGISTRY 是全域的，兩條線的指標一旦同時
+    被 import 就會混在一起，而 lite 的指標拿不到 turn/thread 表會整批失敗。
+    """
+    specs = registry.list_metrics(line)
     if only:
         if only not in registry.REGISTRY:
             raise KeyError(
@@ -28,10 +33,12 @@ def run_all(run_id: str, only: str | None = None) -> pd.DataFrame:
             )
         specs = [registry.REGISTRY[only]]
 
-    tables = registry.load_tables()
-    rules = registry.load_suppression_rules(run_id)
+    tables = (registry.load_tables_lite() if line == "lite"
+              else registry.load_tables())
+    rules = registry.load_suppression_rules(run_id, line=line)
 
-    out_dir = config.RUNS_DIR / run_id / "metrics"
+    out_dir = config.RUNS_DIR / run_id / ("metrics_lite" if line == "lite"
+                                          else "metrics")
     out_dir.mkdir(parents=True, exist_ok=True)
 
     rows: list[dict] = []

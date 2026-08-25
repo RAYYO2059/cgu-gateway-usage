@@ -139,7 +139,8 @@ def build_index() -> str:
         "| 指標名 | 回答什麼 | 單位 | 來源表 | 分母 | 覆蓋率 | 注意事項 | 版本 |",
         "| --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
-    for spec in registry.list_metrics():
+    # 只列 clean：INDEX.md 描述的是已發佈的那條線，lite 尚未發佈。
+    for spec in registry.list_metrics("clean"):
         lines.append(
             f"| `{spec.name}` | {_escape(spec.question)} | {spec.unit} "
             f"| {spec.source} | {_escape(spec.denominator)} "
@@ -149,7 +150,7 @@ def build_index() -> str:
 
     from src import aggregate
 
-    grouped = [s for s in registry.list_metrics() if s.group_by]
+    grouped = [s for s in registry.list_metrics("clean") if s.group_by]
     suppressed = [s for s in grouped
                   if any(d in aggregate.CONCENTRATION_DIMENSIONS for d in s.group_by)]
     exempt = [s for s in grouped if s not in suppressed]

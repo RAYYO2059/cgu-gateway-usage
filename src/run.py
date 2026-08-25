@@ -151,7 +151,8 @@ def cmd_metrics(args: argparse.Namespace) -> int:
     manifest.run_id = run_id
     logger.info("metrics: run_id=%s，讀取 %s", run_id, config.DATA_AGG)
     try:
-        summary = runner.run_all(run_id, getattr(args, "name", None))
+        summary = runner.run_all(run_id, getattr(args, "name", None),
+                                 line=getattr(args, "line", "clean"))
     except (FileNotFoundError, KeyError) as exc:
         logger.error("metrics: %s", exc)
         return 1
@@ -232,6 +233,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub = subparsers.add_parser("metrics", help="執行指標並更新 INDEX/README")
     group = sub.add_mutually_exclusive_group()
+    sub.add_argument("--line", default="clean",
+                     help="要執行哪條資料流的指標（clean / lite），預設 clean")
     group.add_argument("--name", help="只執行這一個指標")
     group.add_argument("--list", dest="list_only", action="store_true",
                        help="列出已註冊的指標，不執行")
