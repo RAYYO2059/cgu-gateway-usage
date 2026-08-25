@@ -37,19 +37,23 @@ def _now() -> datetime:
     return datetime.now().astimezone()
 
 
-def _count_requests() -> int | None:
+def _count_requests(path: Path | None = None) -> int | None:
     """請求級資料表目前的列數。只讀 parquet footer，不載入資料。
 
     記的是「這次執行所面對的資料集有多大」，不是「這次抽取處理了幾列」——
     後者在增量執行時是 0，拿來描述快照會誤導。
+
+    path 預設是 clean 的 01_request。lite 那條線要傳自己的目錄進來——
+    寫死 clean 的路徑會讓 lite 的 run_manifest 記上 clean 的母數，
+    一份自我描述檔記了別條線的數字，比沒有紀錄更糟。
     """
-    if not config.DATA_REQUEST.is_dir():
+    path = path or config.DATA_REQUEST
+    if not path.is_dir():
         return None
     try:
         import pyarrow.dataset as ds
 
-        dataset = ds.dataset(config.DATA_REQUEST, format="parquet",
-                             partitioning="hive")
+        dataset = ds.dataset(path, format="parquet", partitioning="hive")
         return int(dataset.count_rows())
     except Exception as exc:  # 缺 pyarrow、分區壞掉、空目錄
         logger.debug("無法計算請求列數：%s", exc)
@@ -72,6 +76,14 @@ class RunManifest:
     n_metrics_run: int = 0
     n_metrics_failed: int = 0
     started_at: datetime = field(default_factory=_now)
+
+    # 這條線特有的執行事實。預設空 dict，所以 clean 的輸出一個字元都不會變。
+    # 用途是讓 lite 記下 clean 沒有的東西（原始根目錄、去重統計、產生的
+    # parquet 檔名……），同時共用 run_id、時間、狀態、exit_code 的語意
+    # 與寫檔位置——兩條線的執行紀錄格式一致，以後只要一套解析。
+    extra: dict = field(default_factory=dict)
+    # n_requests 要算哪個目錄。None = clean 的 01_request。
+    dataset_dir: Path | None = None
 
     def stage(self, name: str) -> None:
         """記錄一個實際執行的階段。重複進入同一階段只記一次。"""
@@ -109,11 +121,18 @@ class RunManifest:
             "finished_at": finished.isoformat(timespec="seconds"),
             "duration_sec": round(
                 (finished - self.started_at).total_seconds(), 3),
-            "n_requests": _count_requests(),
+            "n_requests": _count_requests(self.dataset_dir),
             "n_metrics_run": self.n_metrics_run,
             "n_metrics_failed": self.n_metrics_failed,
             "exit_code": int(exit_code),
         }
+        # 放在最後：extra 是附加事實，不該蓋掉上面任何一個共通欄位。
+        for key, value in self.extra.items():
+            if key in payload:
+                raise ValueError(
+                    f"extra 的鍵 {key!r} 與 run_manifest 的共通欄位衝突；"
+                    "換一個名字，不要覆寫共通欄位。")
+            payload[key] = value
 
         run_dir = config.RUNS_DIR / self.run_id
         run_dir.mkdir(parents=True, exist_ok=True)

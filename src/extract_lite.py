@@ -33,6 +33,7 @@ import csv
 import hashlib
 import json
 import logging
+import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -399,7 +400,16 @@ def write_partitions(frame: pd.DataFrame, run_id: str, chunk_no: int = 0) -> int
     return int(frame["date_taipei"].nunique())
 
 
-def write_parse_errors(errors: list[tuple[str, str, str]], run_dir: Path) -> Path:
+def write_parse_errors(errors: list[tuple[str, str, str]],
+                       run_dir: Path) -> Path | None:
+    """有解析失敗才寫明細檔；沒有就不寫，回 None。
+
+    原本無條件寫，於是每個 run 目錄都留下一個只有表頭的 41 bytes 檔案，
+    看起來像「有錯誤明細」其實是空的。錯誤數本來就記在 run_manifest 裡，
+    這個檔只在真的有東西可列時才有存在意義。
+    """
+    if not errors:
+        return None
     run_dir.mkdir(parents=True, exist_ok=True)
     target = run_dir / "parse_errors_lite.csv"
     with target.open("w", encoding="utf-8-sig", newline="") as handle:
@@ -407,6 +417,31 @@ def write_parse_errors(errors: list[tuple[str, str, str]], run_dir: Path) -> Pat
         writer.writerow(["source_path", "error_type", "error_message"])
         writer.writerows(errors)
     return target
+
+
+def git_revision() -> str:
+    """目前的 git commit hash；工作區有未提交變更時加註 -dirty。
+
+    回填或無法判定時回 "未知"，不要回一個看起來像真的的值——
+    「這份輸出是哪個程式版本產生的」答錯比答不知道糟。
+    """
+    import subprocess
+
+    try:
+        head = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=config.PROJECT_ROOT, capture_output=True, text=True, timeout=10)
+        if head.returncode != 0:
+            return "未知"
+        revision = head.stdout.strip()
+        dirty = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=config.PROJECT_ROOT, capture_output=True, text=True, timeout=10)
+        if dirty.returncode == 0 and dirty.stdout.strip():
+            revision += "-dirty"
+        return revision
+    except Exception:  # noqa: BLE001  git 不在、不是 repo、逾時
+        return "未知"
 
 
 # ---------------------------------------------------------------------------
@@ -554,6 +589,40 @@ def run(run_id: str, chunk_size: int = CHUNK_SIZE,
     error_file = write_parse_errors(errors, run_dir)
     elapsed = time.perf_counter() - started
 
+    # 這次執行產生的 parquet。檔名帶 run_id，所以反過來也成立：
+    # 從任何一個 part-<run_id>-cNNNN-i.parquet 都查得到它是哪次執行寫的。
+    written = sorted(
+        p.relative_to(config.DATA_REQUEST_LITE).as_posix()
+        for p in config.DATA_REQUEST_LITE.rglob(f"part-{run_id}-*.parquet")
+    ) if config.DATA_REQUEST_LITE.is_dir() else []
+
+    manifest_extra = {
+        "git_revision": git_revision(),
+        "raw_root": str(root),
+        "raw_root_from_env": bool(os.environ.get(config.LITE_RAW_ENV, "").strip()),
+        "input": {
+            "scanned": len(files),
+            "pending": n_pending_total,
+            "skipped": len(files) - n_pending_total,
+            "max_files": max_files,
+            "chunk_size": chunk_size,
+            "chunks": n_chunks,
+        },
+        "output": {
+            "rows_written": total_kept,
+            "files_processed": total_processed,
+            "parquet_files": written,
+            "partitions": sorted(partitions),
+            "remaining": n_pending_total - total_processed - len(errors),
+        },
+        "dedup": {
+            "duplicate_request_id": dup_in_batch + dup_existing,
+            "reprocessed_source_files": total_reparsed,
+            "replaced_rows": replaced_rows,
+        },
+        "parse_errors": len(errors),
+    }
+
     logger.info("--- L1 lite 抽取報告 ---")
     logger.info("原始目錄     %s", root)
     logger.info("掃描檔案數   %d", len(files))
@@ -588,6 +657,7 @@ def run(run_id: str, chunk_size: int = CHUNK_SIZE,
         "replaced_rows": replaced_rows,
         "duplicates": dup_in_batch + dup_existing,
         "elapsed_sec": elapsed,
+        "manifest_extra": manifest_extra,
     }
 
 
@@ -645,9 +715,30 @@ def main(argv: list[str] | None = None) -> int:
     config.ensure_dirs()
     if args.prune_manifest:
         prune_manifest()
-    result = run(config.new_run_id(), chunk_size=args.chunk_size,
-                 max_files=args.max_files)
-    return 0 if result["remaining"] == 0 else 2
+
+    from src.manifest import RunManifest
+
+    run_id = config.new_run_id()
+    # dataset_dir 指向 lite 自己的輸出：不指定的話 n_requests 會記成 clean 的
+    # 母數，一份自我描述檔記了別條線的數字，比沒有紀錄更糟。
+    record = RunManifest(command="extract_lite", run_id=run_id,
+                         dataset_dir=config.DATA_REQUEST_LITE)
+    crashed = False
+    code = 0
+    try:
+        result = run(run_id, chunk_size=args.chunk_size, max_files=args.max_files)
+        record.stage("extract_lite")
+        record.extra.update(result["manifest_extra"])
+        code = 0 if result["remaining"] == 0 else 2
+    except Exception:
+        crashed = True
+        code = 1
+        raise
+    finally:
+        # 待處理 0 的執行也要留紀錄：「這次沒事做」本身是資訊，
+        # 而且是回答「這批資料最後一次被碰是什麼時候」的唯一依據。
+        record.write(code, crashed=crashed)
+    return code
 
 
 if __name__ == "__main__":
