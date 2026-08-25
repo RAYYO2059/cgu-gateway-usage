@@ -130,10 +130,29 @@ def lite_raw_dir() -> Path:
 
 
 def new_run_id(now: datetime | None = None) -> str:
-    """產生新的 run id，例如 ``2026-08-06T1430_r001``。
+    """產生新的 run id 並**當場建立它的 runs/ 目錄**，例如 ``2026-08-06T1430_r001``。
 
     時間戳取本地時間；序號掃描 ``runs/`` 底下同一天已存在的目錄後遞增，
     因此同一天內多次執行會得到 r001、r002……。
+
+    為什麼要順手建目錄
+    ------------------
+    序號是從「已存在的目錄」推出來的，所以**產生 id 與佔用號碼是同一件事**，
+    不是兩件。目錄若拖到執行尾聲才建（原本各階段都是寫檔時才順手 mkdir），
+    中途死掉的執行就從來不會佔到號碼，下一次會拿到同一個序號。
+
+    這是必然碰撞不是機率碰撞：實測同一分鐘內連續呼叫兩次，拿到的是字面上
+    完全相同的 run_id（``2026-08-26T0400_r001`` 兩次），連時間戳都一樣。
+    lite 那條線已經因此吃過虧——12 萬筆的前四次抽取都被逾時砍掉，連續四次
+    都拿到 r003，只靠分鐘精度的時間戳僥倖沒撞在一起。
+
+    對 clean 而言目前是條件性的危險：它不分塊寫入，一個 run 只寫一次檔，
+    所以撞了也不會互相覆蓋。但哪天 clean 的資料量大到要分塊（例如補進
+    8 月的 clean 版本），``part-<run_id>-*.parquet`` 就會靜默互相覆蓋，
+    而那時候沒有人會記得這個洞在這裡。
+
+    副作用是好的：中途死掉會留下一個沒有 ``run_manifest.json`` 的空 run
+    目錄，那本身就是「跑了但沒跑完」的訊號。
     """
     now = now or datetime.now()
     stamp = now.strftime(RUN_ID_FORMAT)
@@ -148,4 +167,6 @@ def new_run_id(now: datetime | None = None) -> str:
             if matched and matched.group("day") == day:
                 highest = max(highest, int(matched.group("seq")))
 
-    return f"{stamp}_r{highest + 1:03d}"
+    run_id = f"{stamp}_r{highest + 1:03d}"
+    (RUNS_DIR / run_id).mkdir(parents=True, exist_ok=True)
+    return run_id

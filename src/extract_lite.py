@@ -25,6 +25,20 @@ clean 的 date_taipei 走的就是 received_at → 台北，對齊它才能兩�
 時間欄位的命名刻意與 clean 一致（ts_utc = received_at、
 ts_created_utc = created_at、log_lag_ms = ts_utc - ts_created_utc），
 因為那是同一個語意；能對齊的就對齊，對不齊的就換名字，不要似像非像。
+
+status=failed 的 run 仍可能有有效資料
+-------------------------------------
+抽取是分塊寫入的：每塊寫完就落地並更新 manifest，不等整批跑完。所以一個
+被中斷的執行——逾時、Ctrl+C、機器休眠——會留下 status=failed 的 run_manifest，
+但它在死掉之前寫出的那幾塊 parquet **是完整且正確的**，下一次執行會靠
+select_pending 從斷點接續，不會重寫也不會漏。
+
+本批 120,520 列就是這樣來的：7 次執行裡有 4 次 status=failed（逾時中止），
+它們合計貢獻了 110,000 列，全部有效。
+
+看到 failed 不要直覺認定那批資料有問題，要看的是 run_manifest 裡的
+output.rows_written 與 output.remaining——前者是這次真的寫出多少，
+後者是還剩多少沒處理。remaining 歸零才代表整批完成，而那可能橫跨好幾個 run。
 """
 
 from __future__ import annotations
