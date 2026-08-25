@@ -6,12 +6,39 @@
 抑制規則刻意放在 registry 層而不是各指標內部：
 放在指標裡的話，新增指標的人必須記得自己套規則，忘記就是靜默外洩。
 放在這裡，只要宣告了 group_by 就自動生效。
+
+
+已知缺口：沒宣告 group_by 的指標完全不進抑制流程
+------------------------------------------------
+上面那句「只要宣告了 group_by 就自動生效」反過來說就是：**沒宣告就不生效**。
+``apply_suppression()`` 第一行就是 ``if not spec.group_by: return result``，
+所以那些指標連 ``suppression_reason`` 欄位都不會有。
+
+2026-08-26 盤點 clean 的 19 個指標，有 5 個有比例欄位卻沒宣告 ``group_by``：
+
+    anomaly_profile                 佔比                     有 n_users
+    tool_types_distribution         declared_thread_share    有 n_users
+    cache_hit_by_request_position   zero_cache_share         ★ 無 n_users
+    model_consistency               佔比                     ★ 無 n_users
+    thread_tool_message_ratio       zero_ratio_share         ★ 無 n_users
+
+後三個既沒有抑制、也沒有 ``n_users``，讀者無從判斷那個比例背後有幾個人。
+這正是豁免政策要求「豁免就必須附 n_users」想擋的情況，只是它們根本沒走到
+那個檢查。
+
+這與「未登記維度預設抑制」是**兩個獨立的缺口**：那個管的是宣告了 group_by
+之後維度怎麼分派，這個管的是根本沒宣告。反轉預設值不會碰到這五個指標。
+
+本次不處理，留紀錄。要處理的話方向有二：讓這些指標補宣告 group_by，或是把
+「有比例欄位卻沒宣告 group_by」變成一則警告——後者比較像 registry 該做的事，
+因為它跟抑制規則放在這裡是同一個理由：不要依賴人記得。
 """
 
 from __future__ import annotations
 
 import logging
 import re
+from typing import Sequence
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -183,7 +210,11 @@ _TOTAL_ROW_NOTE = "同表彙總列未抑制，本列數值可由對照推得"
 
 
 def apply_suppression(
-    spec: MetricSpec, result: MetricResult, rules: pd.DataFrame
+    spec: MetricSpec,
+    result: MetricResult,
+    rules: pd.DataFrame,
+    dimensions: Sequence[str] | None = None,
+    exempt: Sequence[str] | None = None,
 ) -> MetricResult:
     """對宣告了 group_by 的指標套用抑制，並把理由寫進主表。
 
@@ -193,6 +224,12 @@ def apply_suppression(
 
     每一列另外附上 suppression_reason：被抑制的列寫原因，
     豁免維度寫豁免理由，其餘留空。
+
+    dimensions / exempt 預設取 aggregate 的兩份模組層級清單，所以 clean 的
+    呼叫端不必改；lite 那條線傳自己的進來（人層級鍵與維度都不同）。
+
+    **預設是保護不是放行。** 兩份清單都沒有的維度會進抑制流程並發出警告，
+    而不是安靜地豁免——理由見 aggregate.EXEMPT_DIMENSIONS 的註解。
     """
     if not spec.group_by or result.data.empty:
         return result
@@ -212,15 +249,23 @@ def apply_suppression(
 
     from src import aggregate
 
+    suppressed_dims = tuple(
+        aggregate.CONCENTRATION_DIMENSIONS if dimensions is None else dimensions)
+    exempt_dims = tuple(
+        aggregate.EXEMPT_DIMENSIONS if exempt is None else exempt)
+
     for dimension in spec.group_by:
         if dimension not in result.data.columns:
             result.warnings.append(f"group_by 宣告的維度 {dimension!r} 不在輸出欄位裡")
             continue
 
         # 政策性豁免：不是「把人分群」的維度不抑制（見 aggregate 的說明）。
-        # 代價是讀者看不到母數厚薄，所以改用強制附 n_users 來補——
+        # 必須**明確登記**在 EXEMPT_DIMENSIONS 裡才走這條路——沒登記的維度
+        # 走下面的抑制流程並警告，因為「忘記登記」的後果不該是靜默外洩。
+        #
+        # 豁免的代價是讀者看不到母數厚薄，所以改用強制附 n_users 來補——
         # 少了它，「凌晨 3 點 100% 是某某模型」這種一人一格的數字會裸奔出去。
-        if dimension not in aggregate.CONCENTRATION_DIMENSIONS:
+        if dimension in exempt_dims:
             if "n_users" not in result.data.columns:
                 result.warnings.append(
                     f"維度 {dimension!r} 依政策不套用抑制（它分的是請求不是人），"
@@ -228,6 +273,23 @@ def apply_suppression(
                 )
             for index in result.data.index:
                 reasons_by_row.setdefault(index, []).append(_EXEMPT_REASON)
+            continue
+
+        # 到這裡代表這個維度要抑制。它可能是明確登記的，也可能是兩份清單都
+        # 沒有的——後者是新維度沒登記，補救動作與前者完全不同，所以要分開講。
+        #
+        # 「沒登記」要先判：不論 concentration.csv 在不在、有沒有這個維度的
+        # 紀錄，該補的動作都是登記。先看規則表的話，缺 csv 時會發出
+        # 「找不到 concentration.csv」——那句話對一個從未被登記的維度是誤導，
+        # 因為就算把 csv 生出來，build_concentration 也不會算它。
+        if dimension not in suppressed_dims:
+            result.warnings.append(
+                f"維度 {dimension!r} 不在 CONCENTRATION_DIMENSIONS，"
+                f"也不在 EXEMPT_DIMENSIONS，已預設納入抑制但無規則可套用"
+                "：請明確登記——把人分群的維度加進 CONCENTRATION_DIMENSIONS"
+                "（並重跑 aggregate 讓它進 concentration.csv），"
+                "分請求的維度加進 EXEMPT_DIMENSIONS"
+            )
             continue
 
         if rules.empty:
@@ -239,6 +301,7 @@ def apply_suppression(
 
         applicable = rules[rules["維度"] == dimension]
         if applicable.empty:
+            # 已登記卻查無紀錄：規則表跟不上，重算就會有。
             result.warnings.append(
                 f"維度 {dimension!r} 在抑制範圍內，但 concentration.csv 沒有它的紀錄"
                 "：聚合結果可能過時，請重跑 aggregate"

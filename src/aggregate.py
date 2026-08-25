@@ -350,6 +350,31 @@ CONCENTRATION_DIMENSIONS = (
     "account_type", "degree", "entry_year", "dept_code", "client_type",
 )
 
+# 明確登記為「不抑制」的維度。
+#
+# 兩份清單的關係，以及為什麼需要第二份
+# ------------------------------------
+#   CONCENTRATION_DIMENSIONS  要抑制的：這些維度把**人**分群
+#   EXEMPT_DIMENSIONS         明確豁免的：這些維度分的是**請求**
+#   兩份都沒有的維度          → 進抑制流程，並警告要求登記
+#
+# 最後那條是重點。原本的預設是「不在 CONCENTRATION_DIMENSIONS 就豁免」，
+# 於是「忘記把新維度加進清單」的後果是**靜默外洩**——而 registry.py 把抑制
+# 規則放在 registry 層的整個理由，正是為了讓人不必記得套規則。預設值卻剛好
+# 違背那個意圖。
+#
+# 反轉之後，忘記登記的後果變成「被過度抑制 + 一則警告」。失效方向從危險
+# 翻成安全：過度抑制看得見（數字變 NA、有人會來問），靜默外洩看不見。
+#
+# 代價是新增一個分請求的維度時要多寫一行。那是刻意的成本——它強迫你回答
+# 「這個維度分的是人還是請求」，而那個問題本來就該有人回答。
+EXEMPT_DIMENSIONS = (
+    "hour_taipei",        # 一天的第幾小時
+    "endpoint",           # API 端點
+    "model_family",       # 模型
+    "reasoning_effort",   # 推理強度
+)
+
 
 def build_concentration(
     frame: pd.DataFrame,
