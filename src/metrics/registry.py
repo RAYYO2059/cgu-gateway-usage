@@ -396,13 +396,31 @@ def load_tables() -> dict:
     }
 
 
+def dimension_lists(line: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """某條線的 (要抑制的維度, 明確豁免的維度)。
+
+    寫成查表而不是讓呼叫端自己傳：漏傳的後果是整條線的維度都被判成「未登記」，
+    雖然會警告，但那是每個指標各警告一次的噪音，很容易被當成雜訊略過。
+    """
+    from src import aggregate
+
+    if line == "lite":
+        from src import aggregate_lite
+
+        return (aggregate_lite.CONCENTRATION_DIMENSIONS_LITE,
+                aggregate_lite.EXEMPT_DIMENSIONS_LITE)
+    return aggregate.CONCENTRATION_DIMENSIONS, aggregate.EXEMPT_DIMENSIONS
+
+
 def run_metric(spec: MetricSpec, tables: dict, rules: pd.DataFrame) -> MetricResult:
     result = spec.fn(tables)
     if not isinstance(result, MetricResult):
         raise TypeError(
             f"指標 {spec.name} 必須回傳 MetricResult，收到 {type(result).__name__}"
         )
-    return apply_suppression(spec, result, rules)
+    dimensions, exempt = dimension_lists(spec.line)
+    return apply_suppression(spec, result, rules,
+                             dimensions=dimensions, exempt=exempt)
 
 
 def list_metrics(line: str | None = None) -> list[MetricSpec]:

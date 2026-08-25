@@ -25,6 +25,9 @@ def run_all(run_id: str, only: str | None = None,
     line 必須指定（預設 clean）：REGISTRY 是全域的，兩條線的指標一旦同時
     被 import 就會混在一起，而 lite 的指標拿不到 turn/thread 表會整批失敗。
     """
+    if line == "lite":
+        # 只在真的要跑 lite 時才 import，clean 的執行路徑不碰它。
+        import src.metrics_lite  # noqa: F401
     specs = registry.list_metrics(line)
     if only:
         if only not in registry.REGISTRY:

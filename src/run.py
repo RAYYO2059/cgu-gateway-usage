@@ -162,7 +162,12 @@ def cmd_metrics(args: argparse.Namespace) -> int:
     if not getattr(args, "publish", False):
         # 不帶 --publish 就完全不碰 docs/：公開版本何時更新由人決定，
         # 而不是「跑了一次指標」這個副作用。
-        render_index.run()
+        #
+        # 非 clean 的線連 INDEX.md 都不碰：那份文件描述的是已發佈的那條線，
+        # 而 render_index 有數處直接讀全域 REGISTRY，lite 指標一旦被 import
+        # 就會混進去（實測會讓「已註冊指標」從 19 變成 23）。
+        if getattr(args, "line", "clean") == "clean":
+            render_index.run()
         return 0 if (summary["狀態"] == "成功").all() else 1
 
     from src import render_results
