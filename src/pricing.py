@@ -90,6 +90,9 @@ _FIELD_ALIASES: dict[str, tuple[str, ...]] = {
     "prompt_tokens": ("prompt_tokens", "usage.prompt_tokens"),
     "cached_tokens": ("cached_tokens", "usage.cached_tokens"),
     "completion_tokens": ("completion_tokens", "usage.completion_tokens"),
+    # estimate_cost() 本身用不到，但驗證腳本要靠它切「成功的請求」，
+    # 放在同一份對照表裡才不會兩邊各維護一套欄位名。
+    "status_code": ("status_code", "response.status_code"),
     # 台北曆日。優先用現成的欄位，兩者都沒有才退回從 UTC 時間戳自己換算。
     "date_taipei": ("date_taipei",),
     "ts_taipei": ("ts_taipei",),

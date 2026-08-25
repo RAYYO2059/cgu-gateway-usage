@@ -4,7 +4,7 @@
 unpriced_no_table」；價目填進去之後再跑一次，那一格應該搬到 priced。
 兩次都要看不變量那一段全過。
 
-    python -m src.pricing_check <lite_index.parquet 的路徑>
+    python -m src.pricing_check data/01_request_lite
 """
 
 from __future__ import annotations
@@ -20,6 +20,25 @@ from src import pricing
 SAMPLE_SIZE = 20
 
 
+# lite_index 快照用點號欄位名（usage.prompt_tokens），而 data/01_request_lite
+# 的 L1 輸出是攤平的（prompt_tokens）。這裡只做欄位名解析，取值邏輯仍在
+# pricing._FIELD_ALIASES，兩邊共用同一份對照，不各自維護。
+def col(frame: pd.DataFrame, name: str) -> pd.Series:
+    for key in pricing._FIELD_ALIASES[name]:
+        if key in frame.columns:
+            return frame[key]
+    raise KeyError(
+        f"資料裡找不到 {name} 對應的欄位，試過 {pricing._FIELD_ALIASES[name]}")
+
+
+def _k(row, name: str) -> str:
+    """單列（Series）版的欄位名解析。"""
+    for key in pricing._FIELD_ALIASES[name]:
+        if key in row.index:
+            return key
+    raise KeyError(name)
+
+
 def _fmt_int(value: float) -> str:
     return f"{int(value):,}"
 
@@ -27,11 +46,11 @@ def _fmt_int(value: float) -> str:
 def build_report(frame: pd.DataFrame, result: pd.DataFrame) -> list[str]:
     lines: list[str] = []
     total_rows = len(frame)
-    tokens = (frame["usage.prompt_tokens"].fillna(0)
-              + frame["usage.completion_tokens"].fillna(0))
+    tokens = (col(frame, "prompt_tokens").fillna(0)
+              + col(frame, "completion_tokens").fillna(0))
     total_tokens = tokens.sum()
 
-    lines.append(f"lite_index：{_fmt_int(total_rows)} 列，"
+    lines.append(f"資料：{_fmt_int(total_rows)} 列，"
                  f"prompt+completion 合計 {_fmt_int(total_tokens)} token")
 
     # --- 1. pricing_status 分布 ---
@@ -65,9 +84,9 @@ def build_report(frame: pd.DataFrame, result: pd.DataFrame) -> list[str]:
                      f"{_fmt_int(part['tok']):>18}{part['tok'] / total_tokens:>10.2%}")
 
     low = result["confidence"] == pricing.CONFIDENCE_LOW
-    ok2xx = frame["response.status_code"].between(200, 299)
+    ok2xx = col(frame, "status_code").between(200, 299)
     zero = tokens == 0
-    non_token = frame["request.endpoint"].isin(pricing.NON_TOKEN_ENDPOINTS)
+    non_token = col(frame, "endpoint").isin(pricing.NON_TOKEN_ENDPOINTS)
     lines.append(f"  低信心那兩天的 2xx 請求 {_fmt_int((low & ok2xx).sum())} 筆，"
                  f"其中 token 為 0 的 {_fmt_int((low & ok2xx & zero).sum())} 筆"
                  f"（扣掉非 token 端點後 "
@@ -86,16 +105,16 @@ def build_report(frame: pd.DataFrame, result: pd.DataFrame) -> list[str]:
         ("cached 不超過 prompt",
          (result["cached_tokens"] <= result["prompt_tokens"]).all()),
         ("token 中間值與原始欄位一致",
-         (result["prompt_tokens"].eq(frame["usage.prompt_tokens"].fillna(0)).all()
+         (result["prompt_tokens"].eq(col(frame, "prompt_tokens").fillna(0)).all()
           and result["completion_tokens"].eq(
-              frame["usage.completion_tokens"].fillna(0)).all())),
+              col(frame, "completion_tokens").fillna(0)).all())),
         ("cached_tokens 為 null 的列一律當 0",
-         (result.loc[frame["usage.cached_tokens"].isna(), "cached_tokens"] == 0).all()),
+         (result.loc[col(frame, "cached_tokens").isna(), "cached_tokens"] == 0).all()),
         ("ollama 全部標 unpriced_local",
-         (result.loc[frame["request.provider"] == "ollama", "pricing_status"]
+         (result.loc[col(frame, "provider") == "ollama", "pricing_status"]
           == pricing.STATUS_UNPRICED_LOCAL).all()),
         ("非 token 端點全部標 unpriced_non_token（本地模型除外）",
-         (result.loc[non_token & (frame["request.provider"] != "ollama"),
+         (result.loc[non_token & (col(frame, "provider") != "ollama"),
                      "pricing_status"] == pricing.STATUS_UNPRICED_NON_TOKEN).all()),
         ("只有 priced 有金額",
          result.loc[~priced, ["input_cost", "cached_cost", "output_cost", "cost"]]
@@ -121,16 +140,16 @@ def build_report(frame: pd.DataFrame, result: pd.DataFrame) -> list[str]:
     for label, idx in sample:
         f = frame.loc[idx]
         r = result.loc[idx]
-        raw_cached = f["usage.cached_tokens"]
+        raw_cached = f[_k(f, 'cached_tokens')]
         cached_repr = "null" if pd.isna(raw_cached) else _fmt_int(raw_cached)
         lines.append(
-            f"  [{label}] {f['request.provider']} {f['request.endpoint']} "
-            f"{r['model_family']} @{str(f['created_at'])[:10]}")
+            f"  [{label}] {f[_k(f, 'provider')]} {f[_k(f, 'endpoint')]} "
+            f"{r['model_family']} @{pricing.taipei_date(f)}")
         lines.append(
-            f"      prompt={_fmt_int(f['usage.prompt_tokens'])} "
+            f"      prompt={_fmt_int(f[_k(f, 'prompt_tokens')])} "
             f"cached_raw={cached_repr} -> cached={_fmt_int(r['cached_tokens'])} "
             f"uncached={_fmt_int(r['uncached_prompt_tokens'])} "
-            f"completion={_fmt_int(f['usage.completion_tokens'])}")
+            f"completion={_fmt_int(f[_k(f, 'completion_tokens')])}")
         cost = ("cost=未定價" if r["cost"] is None or pd.isna(r["cost"])
                 else f"cost={r['cost']:.6f}"
                       f"（in {r['input_cost']:.6f} + cached {r['cached_cost']:.6f}"
@@ -143,16 +162,16 @@ def build_report(frame: pd.DataFrame, result: pd.DataFrame) -> list[str]:
 
 def _pick_sample(frame, result, tokens) -> list[tuple[str, object]]:
     """分層抽樣，確保每種分支都被看到；同層內取 token 最多的，結果可重現。"""
-    prov = frame["request.provider"]
-    cached_raw = frame["usage.cached_tokens"]
+    prov = col(frame, "provider")
+    cached_raw = col(frame, "cached_tokens")
     strata = [
         ("快取命中", (prov == "openai") & (cached_raw.fillna(0) > 0), 4),
         ("cached=0", (prov == "openai") & cached_raw.notna() & (cached_raw == 0), 3),
         ("cached=null", (prov == "openai") & cached_raw.isna(), 3),
         ("本地", prov == "ollama", 3),
-        ("非token端點", frame["request.endpoint"].isin(pricing.NON_TOKEN_ENDPOINTS), 3),
+        ("非token端點", col(frame, "endpoint").isin(pricing.NON_TOKEN_ENDPOINTS), 3),
         ("低信心", (result["confidence"] == pricing.CONFIDENCE_LOW) & (tokens == 0), 2),
-        ("embeddings", frame["request.endpoint"] == "/v1/embeddings", 1),
+        ("embeddings", col(frame, "endpoint") == "/v1/embeddings", 1),
     ]
     picked: list[tuple[str, object]] = []
     seen: set[object] = set()
@@ -169,7 +188,7 @@ def _pick_sample(frame, result, tokens) -> list[tuple[str, object]]:
             if want == 0:
                 break
     # model_returned 為空的那筆一定要看到，它是 unpriced_no_table 的邊界。
-    empty = frame.index[frame["response.model_returned"].isna()]
+    empty = frame.index[col(frame, "model_returned").isna()]
     if len(empty) and empty[0] not in seen:
         picked.append(("model為空", empty[0]))
     return picked[:SAMPLE_SIZE]
@@ -189,7 +208,7 @@ def arithmetic_check(frame: pd.DataFrame) -> list[str]:
     lines = ["", "拆分算式（價目表是空的，改用假價目跑：輸入 1.0／快取 0.1／輸出 2.0 每 1k）"]
 
     families = sorted({pricing.model_family(m)
-                       for m in frame["response.model_returned"].dropna().unique()})
+                       for m in col(frame, "model_returned").dropna().unique()})
     fake = pricing.PricingTable([
         pricing.PriceRow(model_family=f, effective_date=None,
                          input_per_1k=_FAKE_INPUT,
@@ -207,7 +226,7 @@ def arithmetic_check(frame: pd.DataFrame) -> list[str]:
                 + result["completion_tokens"] / 1000 * _FAKE_OUTPUT)
     diff = (result.loc[priced, "cost"] - expected[priced]).abs()
 
-    cached_hit = priced & (frame["usage.cached_tokens"].fillna(0) > 0)
+    cached_hit = priced & (col(frame, "cached_tokens").fillna(0) > 0)
     checks = [
         ("每一筆 priced 的總額都等於三段獨立重算的結果", bool(diff.lt(1e-9).all())),
         ("有快取命中的列，快取段金額 > 0",
@@ -241,12 +260,14 @@ def arithmetic_check(frame: pd.DataFrame) -> list[str]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("lite_index", type=Path,
-                        help="lite_index.parquet 的路徑")
+                        help="lite 資料的路徑：data/01_request_lite 這種分區目錄，"
+                             "或單一 parquet 檔")
     parser.add_argument("--pricing-table", type=Path, default=None,
                         help=f"價目表路徑，預設 {pricing.PRICING_TABLE_PATH}")
     args = parser.parse_args(argv)
 
-    if not args.lite_index.is_file():
+    # 允許目錄（分區資料集）與單檔兩種形式；pandas 兩者都讀得動。
+    if not args.lite_index.exists():
         print(f"找不到 {args.lite_index}", file=sys.stderr)
         return 2
 
