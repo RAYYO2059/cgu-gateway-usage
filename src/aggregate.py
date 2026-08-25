@@ -11,6 +11,7 @@ agent 會把一個使用者動作展開成多次 request，用 request 當分母
 from __future__ import annotations
 
 import logging
+from typing import Sequence
 
 import pandas as pd
 
@@ -350,7 +351,12 @@ CONCENTRATION_DIMENSIONS = (
 )
 
 
-def build_concentration(frame: pd.DataFrame, registry: pd.DataFrame) -> pd.DataFrame:
+def build_concentration(
+    frame: pd.DataFrame,
+    registry: pd.DataFrame,
+    user_key: str = "username",
+    dimensions: Sequence[str] = CONCENTRATION_DIMENSIONS,
+) -> pd.DataFrame:
     """每個分組維度的人數與單人集中度。
 
     用途是讓後續每個分組統計都能自動附上警示：
@@ -359,21 +365,30 @@ def build_concentration(frame: pd.DataFrame, registry: pd.DataFrame) -> pd.DataF
       （config.DOMINANT_THRESHOLD）
 
     client_type 是請求層級屬性（同一人可能兩種都用），
-    其餘四個是使用者層級屬性，靠 username 接上來。
+    其餘四個是使用者層級屬性，靠 user_key 接上來。
+
+    user_key 與 dimensions 都有預設值，所以 clean 的呼叫端不必改。它們存在的
+    理由是 lite 那條線的人層級鍵是 anonymous_user_id 而不是 username，維度也
+    不同（沒有 client_type，但有 request_style，之後還會加 unit / college）。
+
+    把這兩件事變成參數而不是複製一份 build_concentration_lite()：**抑制邏輯
+    分岔成兩份是最危險的做法**。這裡算出來的每一格決定下游哪些數字會被抑制，
+    兩份實作只要有一份被改動而另一份沒有，兩條線的隱私保護強度就會不一致，
+    而且不會有任何錯誤訊息——只會有一邊的數字悄悄流出去。
     """
-    joined = frame.merge(registry, on="username", how="left")
+    joined = frame.merge(registry, on=user_key, how="left")
     rows: list[dict] = []
 
-    for dimension in CONCENTRATION_DIMENSIONS:
+    for dimension in dimensions:
         # groupby 預設丟棄 NA：degree/entry_year/dept_code 只對 student 有值，
         # staff/service 自然不出現在這些維度裡，這是正確行為。
-        per_user = joined.groupby([dimension, "username"], dropna=True).agg(
+        per_user = joined.groupby([dimension, user_key], dropna=True).agg(
             requests=("request_id", "size"),
             tokens=("total_tokens", "sum"),
         ).reset_index()
 
         for value, part in per_user.groupby(dimension, dropna=True):
-            n_users = int(part["username"].nunique())
+            n_users = int(part[user_key].nunique())
             n_requests = int(part["requests"].sum())
             tokens = float(part["tokens"].sum())
             top1_requests = float(part["requests"].max())
