@@ -12,6 +12,9 @@ runs/
 # 帳號對照表，絕對不能推；只放行明確列出的文件檔
 ref/*
 !ref/FIELD_REQUESTS.md
+# 系代號→學院對照表：內容是公開的系所編制，沒有個資，
+# 而且是人工維護的判斷，要進版控才看得出誰在什麼時候改了哪一列。
+!ref/college_mapping.csv
 # ref/ 是 pipeline 的輸出目錄之一，空目錄要進版控才有 .gitkeep；
 # 但 ref/* 會把 .gitkeep 自己也擋掉，於是它完全不生效。
 # 明確放行，與 docs/.gitkeep 的處理一致。
