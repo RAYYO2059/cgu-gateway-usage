@@ -9,3 +9,6 @@ pandera>=0.24
 # Windows 沒有系統時區資料庫，zoneinfo 需要這個套件才能解析 Asia/Taipei
 tzdata
 matplotlib
+
+# tests/ 用；只有跑測試才需要，不影響 pipeline 執行。
+pytest
