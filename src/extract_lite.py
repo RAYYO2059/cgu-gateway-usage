@@ -433,8 +433,22 @@ def run(run_id: str, chunk_size: int = CHUNK_SIZE,
     """
     started = time.perf_counter()
     ingested_at = datetime.now(UTC)
-    run_dir = config.RUNS_DIR / run_id
     root = config.lite_raw_dir()
+
+    # 一開始就把 run 目錄建起來，不要等到最後寫錯誤檔時才建。
+    #
+    # config.new_run_id() 的序號是掃 runs/ 底下同日已存在的目錄推出來的。
+    # 目錄若拖到執行尾聲才建立，中途死掉的執行就從來不會佔到號碼——實測
+    # 這批資料的前四次抽取都被逾時砍掉，於是連續四次都拿到 r003，只靠
+    # 時間戳（分鐘精度）維持唯一。同一分鐘內啟動兩次又都沒跑完，run_id
+    # 就會完全相同，接著 part-<run_id>-c0000-0.parquet 會互相覆蓋，而
+    # existing_data_behavior="overwrite_or_ignore" 不會有任何提示——
+    # 跟先前那個分塊檔名沒帶塊序號的 bug 是同一個災難的另一個入口。
+    #
+    # 副作用是好的：中途死掉會留下一個沒有 run_manifest.json 的空 run 目錄，
+    # 那本身就是「跑了但沒跑完」的訊號。
+    run_dir = config.RUNS_DIR / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
 
     files = scan_sources(root)
     manifest = load_manifest()
