@@ -28,6 +28,35 @@
 只是讓被標記的範圍不再混用兩套曆日。
 
 價目表在 ``ref/pricing_table.csv``，單位是「每 1,000 token 的價格」。
+
+
+這份估算算不出來的三件事
+------------------------
+**這是牌價等值成本，不是實際帳單。** 底下三項都會讓實際金額與本估算有系統性
+差距，而且都無法從 lite 資料判斷——不是精度問題，是資料裡沒有那個欄位。
+
+1. **service_tier 一律假設 Standard。** 官方分四級：Batch 半價、Flex 半價、
+   Fast 兩倍、Standard 預設。lite schema 沒有這個欄位。若實際大量使用 Batch，
+   **本估算會高估一倍**；若使用 Fast 則會低估一半。這是四項裡影響最大的一項。
+
+2. **區域處理加價未計。** 2026-03-05 之後發布且符合資料落地資格的模型，走區域
+   端點會加收 10%。無法從資料判斷 gateway 走的是全球還是區域端點。
+   **待向單位確認**；若成立，gpt-5.4 之後的模型金額需上調 10%。
+
+3. **促銷價有時效。** gpt-5.6-sol 自 2026-08-22 起的價格是官方標明的促銷價，
+   至少維持到 2026-11-21。該日之後若有人用更新的價目表重算同一批資料，數字
+   會變。價目列的 expires_at 欄記著這件事。
+
+4. **本估算的可重現性性質與本專案其他指標不同。** 其他所有指標都是**資料的
+   函數**：資料不變，重跑必然得到一樣的數字，這也是 --publish 冪等的基礎。
+   成本估算不是——它是「資料 × 外部價目 × 取價時間」的函數。
+
+   所以「同一批資料在不同時間重算得到不同數字」在這裡**不是 bug**，而是這個
+   指標的性質。要重現一份成本數字，必須同時固定資料與 ref/pricing_table.csv
+   的內容；可重現性綁在該表的 fetched_at 上，不綁在資料上。
+
+   引用本估算的文件請一併註明取價日期，否則那個數字在幾個月後會對不起來，
+   而且沒有人查得出為什麼。
 """
 
 from __future__ import annotations
@@ -50,10 +79,34 @@ logger = logging.getLogger(__name__)
 PRICING_TABLE_PATH = config.REF_DIR / "pricing_table.csv"
 
 PRICING_COLUMNS = (
-    "model_family", "effective_date",
-    "input_price_per_1k", "cached_input_price_per_1k", "output_price_per_1k",
-    "source_url", "fetched_at",
+    "model_family", "effective_date", "context_tier",
+    "input_price_per_1k", "input_confidence",
+    "cached_input_price_per_1k", "cached_input_confidence",
+    "cache_write_price_per_1k", "cache_write_confidence",
+    "output_price_per_1k", "output_confidence",
+    "expires_at", "note", "source_url", "fetched_at",
 )
+
+# 長上下文級距的門檻。超過這個 prompt_tokens 的請求適用另一組（約兩倍）價格。
+LONG_CONTEXT_THRESHOLD = 272_000
+TIER_SHORT = "short"
+TIER_LONG = "long"
+
+# price_confidence：價目本身有多可靠。**與 pricing_status 是兩件事**——
+# 後者回答「這筆能不能計價」，前者回答「用來計價的那個數字有多硬」。
+# 混成一欄之後，「有多少筆算不出來」與「有多少筆算得出來但價格存疑」
+# 就再也分不開。
+#
+# **粒度是「每個價位」不是「每一列」。** 一列價目有四個價位，它們的來源
+# 可以不同：8/22 前的 gpt-5.6-sol 只有快取寫入是推估的，輸入／快取讀／
+# 輸出都是官方明列。整列標 inferred 會讓彙總說「一半的金額建立在推估價
+# 上」，而實際只有 13.6%——那個數字會讓人質疑整份估算，而質疑是我們
+# 自己製造的。彙總請用 confidence_breakdown()，按段金額加權。
+CONF_CONFIRMED = "confirmed"      # 官方頁面明列、對應無歧義
+CONF_INFERRED = "inferred"        # 由規律推得（8/22 前 Sol 的快取寫入）
+CONF_PROVISIONAL = "provisional"  # 對應到哪一列有歧義（gpt-5.2-chat-latest）
+CONF_PROMOTIONAL = "promotional"  # 官方列出但有時效，之後重算會變
+CONF_UNPRICED = "unpriced"        # 沒有計價，談不上可靠度
 
 # pricing_status 的四個值。
 STATUS_PRICED = "priced"
@@ -90,6 +143,7 @@ _FIELD_ALIASES: dict[str, tuple[str, ...]] = {
     "prompt_tokens": ("prompt_tokens", "usage.prompt_tokens"),
     "cached_tokens": ("cached_tokens", "usage.cached_tokens"),
     "completion_tokens": ("completion_tokens", "usage.completion_tokens"),
+    "cache_write_tokens": ("cache_write_tokens", "usage.cache_write_tokens"),
     # estimate_cost() 本身用不到，但驗證腳本要靠它切「成功的請求」，
     # 放在同一份對照表裡才不會兩邊各維護一套欄位名。
     "status_code": ("status_code", "response.status_code"),
@@ -103,11 +157,28 @@ _FIELD_ALIASES: dict[str, tuple[str, ...]] = {
 # ---------------------------------------------------------------------------
 # 取值與轉型
 # ---------------------------------------------------------------------------
+def _is_null(value: Any) -> bool:
+    """None / float('nan') / pandas 的 NA 一律視為空。
+
+    不能只寫 ``value != value``：那對 float NaN 成立，但 pandas 的 pd.NA
+    在布林脈絡下會直接 raise（"boolean value of NA is ambiguous"）。
+    L1 lite 的字串欄位用的正是 string dtype，缺值就是 pd.NA，所以這條路徑
+    一定會被走到。
+    """
+    if value is None:
+        return True
+    try:
+        return bool(value != value)
+    except (TypeError, ValueError):
+        # pd.NA 之類在布林脈絡下會炸的哨兵值，本身就代表「沒有值」。
+        return True
+
+
 def _field(row: Mapping[str, Any], name: str) -> Any:
     for key in _FIELD_ALIASES[name]:
         if key in row:
             value = row[key]
-            if value is not None and value == value:  # NaN != NaN
+            if not _is_null(value):
                 return value
     return None
 
@@ -118,7 +189,7 @@ def _as_int(value: Any) -> int:
     parquet 裡 cached_tokens 是 double（因為有 null），不轉會讓
     「int - float」的結果變成 float，金額再乘下去就開始出現浮點尾巴。
     """
-    if value is None or value != value:
+    if _is_null(value):
         return 0
     try:
         return int(value)
@@ -127,7 +198,7 @@ def _as_int(value: Any) -> int:
 
 
 def _as_price(value: Any) -> float | None:
-    if value is None or value != value:
+    if _is_null(value):
         return None
     text = str(value).strip()
     if not text:
@@ -140,7 +211,7 @@ def _as_price(value: Any) -> float | None:
 
 def _as_date(value: Any) -> date | None:
     """把時間戳轉成 UTC 曆日。無法解析回 None。"""
-    if value is None or value != value:
+    if _is_null(value):
         return None
     if isinstance(value, datetime):
         stamp = value
@@ -199,9 +270,48 @@ def taipei_date(row: Mapping[str, Any]) -> date | None:
     return (stamp_utc.astimezone(timezone.utc) + _TAIPEI_OFFSET).date()
 
 
+# 有價格就必須標來源。空白不預設成 confirmed——那是往危險方向失效：
+# 補價格的人忘了填 confidence，那個數字就靜默變成「官方明列」，
+# 而這一欄存在的唯一理由就是防這件事。價目表還有 47 列待填，
+# 這條規則會在第一次漏填時就擋下來。
+#
+# 判斷與先前反轉抑制預設值相同：預設值該往安全的方向失效。過度標示看得見
+# （有人會來問「這為什麼是 inferred」），靜默標成 confirmed 看不見。
+VALID_CONFIDENCE = frozenset({
+    CONF_CONFIRMED, CONF_INFERRED, CONF_PROVISIONAL, CONF_PROMOTIONAL,
+})
+
+
+def _conf(value: Any, *, price: float | None, field: str,
+          family: str, line_no: int) -> str:
+    """讀某個價位的 confidence 欄。有價格卻空白即 raise。"""
+    text = "" if _is_null(value) else str(value).strip()
+    if price is None:
+        # 沒有價格的價位不會被用到，confidence 是什麼都無所謂。
+        return text or CONF_UNPRICED
+    if not text:
+        raise ValueError(
+            f"{PRICING_TABLE_PATH} 第 {line_no} 行（{family}）："
+            f"{field} 有價格 {price} 但對應的 confidence 欄空白。\n"
+            "有價格就必須明確標示來源，不會預設成 confirmed——"
+            f"請填 {sorted(VALID_CONFIDENCE)} 之一：\n"
+            "  confirmed   官方頁面明列、對應無歧義\n"
+            "  inferred    由規律推得（例：5.6 家族快取寫入為輸入的 1.25 倍）\n"
+            "  provisional 對應到哪一列有歧義\n"
+            "  promotional 官方列出但有時效"
+        )
+    if text not in VALID_CONFIDENCE:
+        raise ValueError(
+            f"{PRICING_TABLE_PATH} 第 {line_no} 行（{family}）："
+            f"{field} 的 confidence {text!r} 不是合法值，"
+            f"須為 {sorted(VALID_CONFIDENCE)} 之一"
+        )
+    return text
+
+
 def model_family(model_returned: Any) -> str | None:
     """去掉版本日期後綴，例如 gpt-5.4-mini-2026-03-17 → gpt-5.4-mini。"""
-    if model_returned is None or model_returned != model_returned:
+    if _is_null(model_returned):
         return None
     text = str(model_returned).strip()
     return MODEL_DATE_SUFFIX.sub("", text) if text else None
@@ -214,9 +324,17 @@ def model_family(model_returned: Any) -> str | None:
 class PriceRow:
     model_family: str
     effective_date: date | None  # None = 從最早開始適用
-    input_per_1k: float | None
-    cached_input_per_1k: float | None
-    output_per_1k: float | None
+    context_tier: str = TIER_SHORT
+    input_per_1k: float | None = None
+    input_confidence: str = CONF_CONFIRMED
+    cached_input_per_1k: float | None = None
+    cached_input_confidence: str = CONF_CONFIRMED
+    cache_write_per_1k: float | None = None
+    cache_write_confidence: str = CONF_CONFIRMED
+    output_per_1k: float | None = None
+    output_confidence: str = CONF_CONFIRMED
+    expires_at: str = ""
+    note: str = ""
     source_url: str = ""
     fetched_at: str = ""
     line_no: int = 0
@@ -236,34 +354,51 @@ class PricingTable:
     """model_family → 依生效日排序的價目列。"""
 
     def __init__(self, rows: Iterable[PriceRow]) -> None:
-        self._by_family: dict[str, list[PriceRow]] = {}
+        # 兩層 key：(family, context_tier)。長短上下文是**平行的兩組價目**，
+        # 不是同一組的修正——同一個 family 可以只有短沒有長（官方未列級距時
+        # 一律用短），所以不能把長上下文當成短的一個係數。
+        self._by_key: dict[tuple[str, str], list[PriceRow]] = {}
         for row in rows:
-            self._by_family.setdefault(row.model_family, []).append(row)
-        for group in self._by_family.values():
+            self._by_key.setdefault((row.model_family, row.context_tier),
+                                    []).append(row)
+        for group in self._by_key.values():
             # None（未指定生效日）排最前面，代表「一直都適用」。
-            group.sort(key=lambda r: (r.effective_date is not None, r.effective_date or date.min))
+            group.sort(key=lambda r: (r.effective_date is not None,
+                                      r.effective_date or date.min))
 
     def __len__(self) -> int:
-        return sum(len(g) for g in self._by_family.values())
+        return sum(len(g) for g in self._by_key.values())
 
     @property
     def families(self) -> list[str]:
-        return sorted(self._by_family)
+        return sorted({family for family, _ in self._by_key})
 
     @property
     def priced_families(self) -> list[str]:
-        return sorted(f for f, g in self._by_family.items()
-                      if any(r.has_any_price for r in g))
+        return sorted({family for (family, _), g in self._by_key.items()
+                       if any(r.has_any_price for r in g)})
 
-    def lookup(self, family: str | None, on_date: date | None) -> PriceRow | None:
-        """取某個 family 在某日適用的價目列。
+    def lookup(self, family: str | None, on_date: date | None,
+               tier: str = TIER_SHORT) -> PriceRow | None:
+        """取某個 family 在某日、某個上下文級距適用的價目列。
 
-        on_date 為 None（請求沒有可解析的時間）時只有在該 family 只有一列
-        價目時才回答；有多列就是不知道該用哪一段，回 None 讓上層標成未定價。
+        找不到長上下文價目時**退回短上下文**：官方只為部分模型列出長上下文
+        級距，沒列的就是沿用同一組價格，那是規則不是缺漏。
+        退回時不降 price_confidence——價格本身仍是官方明列的。
+
+        on_date 為 None（請求沒有可解析的時間）時只有在該組只有一列價目時
+        才回答；有多列就是不知道該用哪一段，回 None 讓上層標成未定價。
         """
         if not family:
             return None
-        group = self._by_family.get(family)
+        row = self._lookup_tier(family, on_date, tier)
+        if row is None and tier != TIER_SHORT:
+            row = self._lookup_tier(family, on_date, TIER_SHORT)
+        return row
+
+    def _lookup_tier(self, family: str, on_date: date | None,
+                     tier: str) -> PriceRow | None:
+        group = self._by_key.get((family, tier))
         if not group:
             return None
         if on_date is None:
@@ -292,12 +427,37 @@ class PricingTable:
                 family = (raw.get("model_family") or "").strip()
                 if not family:
                     continue
+                prices = {
+                    field: _as_price(raw.get(field))
+                    for field in ("input_price_per_1k",
+                                  "cached_input_price_per_1k",
+                                  "cache_write_price_per_1k",
+                                  "output_price_per_1k")
+                }
+
+                def conf(field: str, column: str) -> str:
+                    return _conf(raw.get(column), price=prices[field],
+                                 field=field, family=family, line_no=line_no)
+
                 rows.append(PriceRow(
                     model_family=family,
                     effective_date=_as_date(raw.get("effective_date")),
-                    input_per_1k=_as_price(raw.get("input_price_per_1k")),
-                    cached_input_per_1k=_as_price(raw.get("cached_input_price_per_1k")),
-                    output_per_1k=_as_price(raw.get("output_price_per_1k")),
+                    context_tier=((raw.get("context_tier") or "").strip()
+                                  or TIER_SHORT),
+                    input_per_1k=prices["input_price_per_1k"],
+                    input_confidence=conf("input_price_per_1k",
+                                          "input_confidence"),
+                    cached_input_per_1k=prices["cached_input_price_per_1k"],
+                    cached_input_confidence=conf("cached_input_price_per_1k",
+                                                 "cached_input_confidence"),
+                    cache_write_per_1k=prices["cache_write_price_per_1k"],
+                    cache_write_confidence=conf("cache_write_price_per_1k",
+                                                "cache_write_confidence"),
+                    output_per_1k=prices["output_price_per_1k"],
+                    output_confidence=conf("output_price_per_1k",
+                                           "output_confidence"),
+                    expires_at=(raw.get("expires_at") or "").strip(),
+                    note=(raw.get("note") or "").strip(),
                     source_url=(raw.get("source_url") or "").strip(),
                     fetched_at=(raw.get("fetched_at") or "").strip(),
                     line_no=line_no,
@@ -323,11 +483,22 @@ class CostEstimate:
     cached_tokens: int
     uncached_prompt_tokens: int
     completion_tokens: int
+    cache_write_tokens: int = 0
+    context_tier: str = TIER_SHORT
     input_cost: float | None = None
     cached_cost: float | None = None
+    cache_write_cost: float | None = None
     output_cost: float | None = None
     cost: float | None = None
     price_effective_date: date | None = None
+    # 四段各自的價目可靠度。與 pricing_status 分開：後者說「能不能算」，
+    # 這裡說「算出來的那個數字有多硬」；而且是逐段的，因為同一列價目的
+    # 四個價位來源可以不同。
+    input_confidence: str = CONF_UNPRICED
+    cached_confidence: str = CONF_UNPRICED
+    cache_write_confidence: str = CONF_UNPRICED
+    output_confidence: str = CONF_UNPRICED
+    price_expires_at: str = ""
     note: str = ""
 
 
@@ -348,8 +519,18 @@ def estimate_cost(
     prompt_tokens = _as_int(_field(row, "prompt_tokens"))
     cached_tokens = _as_int(_field(row, "cached_tokens"))
     completion_tokens = _as_int(_field(row, "completion_tokens"))
+    cache_write_raw = _field(row, "cache_write_tokens")
+    cache_write_tokens = _as_int(cache_write_raw)
+
+    # 級距依 prompt_tokens 判定（含快取命中的部分）：長上下文加價是為了
+    # 承載那個 context window，不管其中多少來自快取。
+    tier = TIER_LONG if prompt_tokens > LONG_CONTEXT_THRESHOLD else TIER_SHORT
 
     note = ""
+    if _is_null(cache_write_raw):
+        # 5.6 家族的 cache_write 覆蓋率 94~98%，缺的那些視為 0 並標記——
+        # 不標的話「這筆沒有快取寫入」與「這筆沒回報快取寫入」看起來一樣。
+        note = "cache_write_tokens 未回報，以 0 計"
     # cached 不該大於 prompt；真的發生時夾住，否則未命中段會變負數，
     # 讓總額被無聲地扣掉一塊。目前的 lite 資料沒有這種列。
     if cached_tokens > prompt_tokens:
@@ -368,6 +549,8 @@ def estimate_cost(
             cached_tokens=cached_tokens,
             uncached_prompt_tokens=uncached,
             completion_tokens=completion_tokens,
+            cache_write_tokens=cache_write_tokens,
+            context_tier=tier,
             note="；".join(p for p in (note, extra) if p),
         )
 
@@ -378,7 +561,7 @@ def estimate_cost(
     if endpoint in NON_TOKEN_ENDPOINTS:
         return unpriced(STATUS_UNPRICED_NON_TOKEN)
 
-    price = pricing_table.lookup(family, on_date)
+    price = pricing_table.lookup(family, on_date, tier)
     if price is None:
         if not family:
             return unpriced(STATUS_UNPRICED_NO_TABLE, "model_returned 為空")
@@ -394,8 +577,15 @@ def estimate_cost(
     if cached_tokens > 0 and price.cached_input_per_1k is None:
         return unpriced(STATUS_UNPRICED_NO_TABLE, f"{family} 有快取命中但快取價尚未填")
 
+    # 快取寫入只有 5.6 家族收費，其餘模型該欄留空即視為不計。
+    # 留空與 0 在這裡語意相同（都不產生金額），所以不擋——差別在於
+    # 「有 token 但沒填價」對這一段是正常情形，不是缺漏。
+    billable_cache_write = (cache_write_tokens
+                            if price.cache_write_per_1k is not None else 0)
+
     input_cost = uncached / 1000 * price.input_per_1k
     cached_cost = cached_tokens / 1000 * (price.cached_input_per_1k or 0.0)
+    cache_write_cost = billable_cache_write / 1000 * (price.cache_write_per_1k or 0.0)
     output_cost = completion_tokens / 1000 * (price.output_per_1k or 0.0)
 
     return CostEstimate(
@@ -406,13 +596,65 @@ def estimate_cost(
         cached_tokens=cached_tokens,
         uncached_prompt_tokens=uncached,
         completion_tokens=completion_tokens,
+        cache_write_tokens=cache_write_tokens,
+        context_tier=price.context_tier,
         input_cost=input_cost,
         cached_cost=cached_cost,
+        cache_write_cost=cache_write_cost,
         output_cost=output_cost,
-        cost=input_cost + cached_cost + output_cost,
+        cost=input_cost + cached_cost + cache_write_cost + output_cost,
         price_effective_date=price.effective_date,
+        input_confidence=price.input_confidence,
+        cached_confidence=price.cached_input_confidence,
+        cache_write_confidence=price.cache_write_confidence,
+        output_confidence=price.output_confidence,
+        price_expires_at=price.expires_at,
         note=note,
     )
+
+
+# 四段的 (金額欄, confidence 欄) 對照。彙總與逐筆輸出都靠它，不要各寫一份。
+COST_SEGMENTS: tuple[tuple[str, str, str], ...] = (
+    ("input_cost", "input_confidence", "未快取 prompt"),
+    ("cached_cost", "cached_confidence", "快取讀"),
+    ("cache_write_cost", "cache_write_confidence", "快取寫"),
+    ("output_cost", "output_confidence", "輸出"),
+)
+
+
+def confidence_breakdown(result):
+    """按**段金額**加權彙總 price_confidence。回傳 DataFrame。
+
+    為什麼不能用「筆數 × 該筆的 confidence」
+    ----------------------------------------
+    一筆請求的金額由四段組成，四段的價目來源可以不同。8/22 前的
+    gpt-5.6-sol 只有快取寫入是推估價，其餘三段都是官方明列——整筆算成
+    inferred 會得出「50.2% 的金額建立在推估價上」，而按段加權的實際值是
+    13.6%。前者會讓讀者質疑整份估算，而那個質疑是我們自己製造的。
+
+    代價是**同一筆請求會同時出現在多個桶裡**（它的錢確實一部分來自明列價、
+    一部分來自推估價），所以「涉及筆數」那一欄跨列相加會超過總筆數。
+    欄名寫明了這件事；金額欄則是可加總的，四個桶相加等於總額。
+    """
+    import pandas as pd
+
+    rows: dict[str, dict] = {}
+    for cost_col, conf_col, _label in COST_SEGMENTS:
+        amount = result[cost_col].fillna(0)
+        for conf, part in amount.groupby(result[conf_col]):
+            value = float(part.sum())
+            if value == 0 and conf == CONF_UNPRICED:
+                continue
+            bucket = rows.setdefault(conf, {"金額": 0.0, "涉及筆數": 0})
+            bucket["金額"] += value
+            bucket["涉及筆數"] += int((part > 0).sum())
+
+    table = pd.DataFrame(rows).T.rename_axis("price_confidence").reset_index()
+    if table.empty:
+        return table
+    total = table["金額"].sum()
+    table["金額%"] = table["金額"] / total if total else 0.0
+    return table.sort_values("金額", ascending=False).reset_index(drop=True)
 
 
 def estimate_frame(frame, pricing_table: PricingTable):
