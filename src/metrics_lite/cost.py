@@ -147,7 +147,7 @@ def group_cost(part: pd.DataFrame, column: str = "_cost_filled"):
         全部是本地模型            → 0.0，那是事實
         其餘（無牌價／非 token）  → NA，我們不知道
 
-    這是 DESIGN_NOTES 那條「未定價不填 0」在指標層的實作。原本這裡直接
+    這是 ENGINEERING_NOTES〈事後補寫的紀錄不是紀錄〉那條「未定價不填 0」在指標層的實作。原本這裡直接
     ``sum(fillna(0))``，把 pricing.py 特地設計的四值 pricing_status 抹平成
     一個數字——上游分得很細，下游一行 fillna 就還原回去了。
     """
