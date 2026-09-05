@@ -1,0 +1,10 @@
+﻿規則,標記名,判定字串,是否為排除項,加入日期,來源
+3,title_gen,your job is to provide a short title,否,2026-08-27,"scratchpad/markers.py（2026-08-27 重建為 src/classify_lite/markers.py）"
+3,fork_desc,You are in a fork of an existing Codex thread,否,2026-08-27,同上
+3,safety_review,Codex agent history,否,2026-08-27,"同上。兩種安全審查變體共用這個字串，比原本只抓「whose request action you are assessing」多命中一倍"
+3,safety_compliance,upholding safety and compliance standards for Codex,否,2026-08-27,同上
+3,suggestions,hyperpersonalized suggestions,否,2026-08-27,同上
+3,internal_ctx,<codex_internal_context,否,2026-08-27,同上
+4,classifier_head,你現在只執行內容分類,否,2026-08-27,"同上。與 data_block 同屬一支 ollama 分類器，兩條任一命中即算。**2026-09-05 重跑：兩條 100% 共現，各命中 10,507 個相異內容。**留兩條不合併——外殼改版時可能只剩一條，屆時兩者不再相等就是訊號；合併成一條的話，改版會表現成命中數下降而看不出原因"
+4,data_block,===== DATA START =====,否,2026-08-27,同上
+-,ambient_ui,<in-app-browser-context,是,2026-08-27,"同上。**明確不攔**：它把 UI 狀態塞在使用者請求前面，後面接「## My request for Codex:」，意圖仍是使用者的。列在這裡是為了讓「為什麼不攔」看得見——刪掉它，下一個人會以為是漏掉的"

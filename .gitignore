@@ -18,6 +18,19 @@ ref/*
 # 價目表：公開牌價加上抓取來源，沒有個資；進版控才追得出
 # 某個月的估算是用哪一版價格算的。
 !ref/pricing_table.csv
+# 前置規則的判定字串：上游工具的固定框架句，沒有個資也沒有使用者原文。
+# 它是分類母數的唯一依據——OVERVIEW 4.2 明文引用它，不放行的話 clone
+# 下來的讀者點不到，而那張表的四個數字就再也無從查證。
+!ref/prefilter_markers.csv
+# 三軸分類的值域與邊界說明：分類定義本身，沒有個資也沒有樣本內容。
+# 同理，OVERVIEW 4.3 的三軸值全部來自它。
+!ref/label_dictionary.csv
+#
+# **在 ref/ 底下建立新檔案時，要同步回來檢查這份白名單。** 這裡是白名單制
+# （`ref/*` 擋全部，逐項放行），而被 ignore 的檔案**不會出現在 git status**
+# ——新檔就這樣安靜地留在本機，直到有人 clone 之後點不到才發現。
+# prefilter_markers.csv 就是這樣漏掉的，而那已經是文件引用一個不存在的
+# 東西的第二次（第一次是 markers.py，見 DESIGN_NOTES 對應章節）。
 # ref/ 是 pipeline 的輸出目錄之一，空目錄要進版控才有 .gitkeep；
 # 但 ref/* 會把 .gitkeep 自己也擋掉，於是它完全不生效。
 # 明確放行，與 docs/.gitkeep 的處理一致。
@@ -25,6 +38,9 @@ ref/*
 
 # 設計筆記：B 文件的素材，含尚未定稿的判斷與具體數字，不推 GitHub
 docs/DESIGN_NOTES.md
+# 分類標註筆記：逐筆的形態描述。在「1 個 uid 就構成一支流水線」的母體裡，
+# 形態描述本身就是準識別資訊——不含姓名也足以指認，同樣不推。
+docs/CLASSIFICATION_NOTES.md
 
 # --- Python ---
 __pycache__/
