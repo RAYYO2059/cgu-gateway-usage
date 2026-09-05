@@ -1,10 +1,13 @@
 # CGU AI Gateway 使用統計
 
+<https://github.com/RAYYO2059/cgu-gateway-usage>
+
 把校內 AI gateway 的 API 請求日誌整理成一批可重跑的使用統計：誰在用、拿它做什麼、怎麼用。
 
 點進來想看什麼，先講清楚：
 
-- **只想看結果** → [docs/RESULTS.md](docs/RESULTS.md)，三張圖加 19 個指標的完整數字，還有每個數字該怎麼讀。
+- **想看整體結論** → [docs/OVERVIEW.md](docs/OVERVIEW.md)，24 天、120,520 筆的完整敘述：各單位的使用分布、成本結構、資料內容特徵與已知限制。
+- **想看逐指標的完整表格** → [docs/RESULTS_lite.md](docs/RESULTS_lite.md)（lite，24 天）或 [docs/RESULTS.md](docs/RESULTS.md)（clean，1.8 天、含對話結構）。
 - **想確認某個數字怎麼算的** → [docs/INDEX.md](docs/INDEX.md)，每個指標的分母、覆蓋率、不能拿來做什麼。
 - **想自己重跑或加新資料** → 往下看〈重跑〉。原始日誌不在這個 repo 裡，得自己放。
 
@@ -36,6 +39,7 @@
 - **已註冊指標**：19 個（其中 9 個宣告了分組維度，比例欄位會自動抑制）
 - **已執行過**：19 個
 - 完整清單與定義見 [docs/INDEX.md](docs/INDEX.md)
+- lite 那條線的指標見 [docs/INDEX.md 的 lite 節](docs/INDEX.md#lite-指標)
 
 ```
 python -m src.run metrics --list      # 列出已註冊指標
@@ -52,6 +56,23 @@ python -m src.run metrics --name <名稱>  # 單一執行
 - **錯誤極少**。86 / 9,937。400 全部是客戶端送錯參數，不是服務故障；唯一的 520 是上游異常。
 - **19 個 turn 發生過上下文壓縮**，對話歷史在同一個 `turn_id` 內被重置。它們只污染尾端：排除後 p50 與 p75 完全不變，p99 從 63.8 降到 46.0、max 從 199 降到 146。
 <!-- AUTOGEN:HIGHLIGHTS:END -->
+
+另一批資料（lite，24 天）回答的是不同的問題：
+
+<!-- AUTOGEN:HIGHLIGHTS_LITE:START -->
+- **規模與成本**（lite，24 天／120,520 筆／357 個 uid，其中 275 人、82 個服務憑證）。牌價等值成本合計 **US$2,749.32**，其中快取讀寫合計佔 **47.2%**——機制的解釋見 [docs/RESULTS.md](docs/RESULTS.md)。
+<!-- AUTOGEN:HIGHLIGHTS_LITE:END -->
+
+## 結果怎麼讀
+
+- **[docs/OVERVIEW.md](docs/OVERVIEW.md) — 總覽。先看這份。**
+- 詳細表格：
+  [RESULTS_lite.md](docs/RESULTS_lite.md)（24 天、120,520 筆：誰在用、花多少）／
+  [RESULTS.md](docs/RESULTS.md)（1.8 天、9,937 筆：一個 turn 內部發生什麼）
+- 指標定義、分母與限制：[docs/INDEX.md](docs/INDEX.md)
+
+兩份 RESULTS 不是新舊關係——它們回答不同的問題，而且互相支撐。
+為什麼三個指標 lite 永遠做不出來，見 INDEX.md 的導覽。
 
 ## 這批資料不能說什麼
 
@@ -119,4 +140,4 @@ python -m src.run audit      # 欄位稽核：原始 JSON 有但沒抽的欄位�
 
 `docs/` 底下的數字和圖是某一次執行的快照，不是即時的。想知道那次跑了什麼，看 `runs/<run_id>/run_manifest.json`——不過 `runs/` 也不進版控，所以你看到的快照只有 `docs/` 這一份。
 
-本檔的三個 `AUTOGEN` 區塊由 `python -m src.render_index` 產生，區塊以外的文字不會被覆寫。`docs/INDEX.md` 整份都是產生的，要改內容請改指標的 `@metric` 參數。
+本檔的 `AUTOGEN` 區塊由兩個 renderer 各填各的：`python -m src.render_index` 填 clean 的三個區塊，`python -m src.render_lite` 填 `HIGHLIGHTS_LITE`。區塊以外的文字不會被覆寫。`docs/INDEX.md` 同樣是標記式的，clean 與 lite 的指標表分別由這兩個 renderer 產生，要改內容請改指標的 `@metric` 參數。

@@ -126,47 +126,53 @@ def _escape(text: str | None) -> str:
     return str(text).replace("|", "\\|").replace("\n", " ").strip()
 
 
-def build_index() -> str:
+def build_metric_table(line: str) -> str:
+    """某一條線的指標表。
+
+    **一律用 list_metrics(line) 而不是全域 REGISTRY**：兩條線的指標一旦在
+    同一個行程裡被 import 就會混在一起，而混進去的症狀是「已註冊指標」
+    從 19 變成 23，沒有任何錯誤訊號。run() 的斷言擋的是呼叫端傳錯 line，
+    擋不住這裡讀錯範圍——兩道防線各管一件事。
+    """
     coverage = coverage_lookup()
+    specs = registry.list_metrics(line)
     lines = [
-        "# 指標索引",
-        "",
-        "本檔由 `python -m src.render_index` 從 `src/metrics/registry.py` 的",
-        "註冊表產生，請勿手動編輯。要改內容請改指標的 `@metric` 參數。",
-        "",
-        f"已註冊指標：{len(registry.REGISTRY)} 個",
+        f"已註冊指標：{len(specs)} 個",
         "",
         "| 指標名 | 回答什麼 | 單位 | 來源表 | 分母 | 覆蓋率 | 注意事項 | 版本 |",
         "| --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
-    # 只列 clean：INDEX.md 描述的是已發佈的那條線，lite 尚未發佈。
-    for spec in registry.list_metrics("clean"):
+    for spec in specs:
         lines.append(
             f"| `{spec.name}` | {_escape(spec.question)} | {spec.unit} "
             f"| {spec.source} | {_escape(spec.denominator)} "
             f"| {coverage.get(spec.name, NOT_RUN)} | {_escape(spec.caveat)} "
             f"| {spec.version} |"
         )
+    return "\n".join(lines)
 
-    from src import aggregate
 
-    grouped = [s for s in registry.list_metrics("clean") if s.group_by]
+def build_suppression_block(line: str) -> str:
+    """某一條線的抑制說明。維度清單依線別查表，不寫死 clean 的那兩份。"""
+    from src.metrics.registry import dimension_lists
+
+    concentration, _exempt_dims = dimension_lists(line)
+    specs = registry.list_metrics(line)
+    grouped = [s for s in specs if s.group_by]
     suppressed = [s for s in grouped
-                  if any(d in aggregate.CONCENTRATION_DIMENSIONS for d in s.group_by)]
+                  if any(d in concentration for d in s.group_by)]
     exempt = [s for s in grouped if s not in suppressed]
+    filename = "concentration_lite.csv" if line == "lite" else "concentration.csv"
 
-    lines += [
-        "",
-        "## 分組指標與抑制",
-        "",
+    lines = [
         f"宣告了 `group_by` 的指標共 {len(grouped)} 個，其中 {len(suppressed)} 個"
         f"受抑制、{len(exempt)} 個依政策豁免。",
         "",
-        "### 受抑制的維度",
+        "**受抑制的維度**",
         "",
         "只有**把人分群**的維度才抑制："
-        f"`{'`、`'.join(aggregate.CONCENTRATION_DIMENSIONS)}`。",
-        "依 `runs/<run_id>/concentration.csv` 判定，觸發任一條件即抑制：",
+        f"`{'`、`'.join(concentration)}`。",
+        f"依 `runs/<run_id>/{filename}` 判定，觸發任一條件即抑制：",
         "",
         f"- 分組人數 < `MIN_GROUP_SIZE`（{config.MIN_GROUP_SIZE}）",
         f"- 單一使用者佔該組流量 > `DOMINANT_THRESHOLD`"
@@ -181,7 +187,7 @@ def build_index() -> str:
 
     lines += [
         "",
-        "### 豁免的維度",
+        "**豁免的維度**",
         "",
         "時段、端點、模型、狀態碼這類維度分的是**請求**不是**人**，不抑制。",
         "抑制它們只會把事實抹掉——「凌晨 3 點只有 2 個人在用」本身就是要報的事實，",
@@ -192,19 +198,9 @@ def build_index() -> str:
     ]
     for spec in exempt:
         lines.append(f"- `{spec.name}`：分組維度 {', '.join(spec.group_by)}（附 n_users）")
-
-    lines += [
-        "",
-        "## 欄位說明",
-        "",
-        "- **單位**：這個指標的分析粒度（request / turn / thread / user）。",
-        "- **來源表**：實際讀哪張表計算。",
-        "- **分母**：比例的母體是什麼。分母講不清楚的比例不能用。",
-        "- **覆蓋率**：最近一次執行時，母體中實際有值的比例。",
-        f"  尚未執行過的指標標示為「{NOT_RUN}」。",
-        "",
-    ]
-    return "\n".join(lines) + "\n"
+    if not exempt:
+        lines.append("- （這條線目前沒有豁免維度的分組指標）")
+    return "\n".join(lines)
 
 
 def build_data_block() -> str:
@@ -243,14 +239,21 @@ def build_data_block() -> str:
 
 
 def build_metrics_block() -> str:
+    # 一律以 clean 為範圍：README 描述的是已發佈的那條線。用全域 REGISTRY
+    # 的話，兩條線同時被 import 時這三個數字會靜靜變大（實測 19 → 23）。
+    specs = registry.list_metrics("clean")
     coverage = coverage_lookup()
-    executed = sum(1 for name in registry.REGISTRY if name in coverage)
-    grouped = sum(1 for s in registry.REGISTRY.values() if s.group_by)
+    executed = sum(1 for s in specs if s.name in coverage)
+    grouped = sum(1 for s in specs if s.group_by)
     return "\n".join([
-        f"- **已註冊指標**：{len(registry.REGISTRY)} 個"
+        f"- **已註冊指標**：{len(specs)} 個"
         f"（其中 {grouped} 個宣告了分組維度，比例欄位會自動抑制）",
         f"- **已執行過**：{executed} 個",
         "- 完整清單與定義見 [docs/INDEX.md](docs/INDEX.md)",
+        # 只給連結，不在這裡數 lite 的指標——數了就得讀 docs/data_lite/，
+        # 而只跑 clean 時那個目錄可能是舊的，README 會變成半舊半新。
+        "- lite 那條線的指標見 "
+        "[docs/INDEX.md 的 lite 節](docs/INDEX.md#lite-指標)",
         "",
         "```",
         "python -m src.run metrics --list      # 列出已註冊指標",
@@ -336,10 +339,10 @@ def build_highlights_block() -> str:
     return "\n".join(lines)
 
 
-def replace_block(text: str, key: str, body: str) -> str:
+def replace_block(text: str, key: str, body: str, label: str = "README") -> str:
     pattern = re.compile(_MARKER_TEMPLATE.format(key=key), re.DOTALL)
     if not pattern.search(text):
-        raise ValueError(f"README 找不到 AUTOGEN:{key} 標記，拒絕寫入以免破壞檔案")
+        raise ValueError(f"{label} 找不到 AUTOGEN:{key} 標記，拒絕寫入以免破壞檔案")
     # \g<start> / \g<end> 原樣保留標記本身，只換中間。
     return pattern.sub(lambda m: f"{m.group('start')}\n{body}\n{m.group('end')}", text)
 
@@ -359,12 +362,29 @@ def render_readme() -> bool:
 
 
 def render_index() -> bool:
-    config.DOCS_DIR.mkdir(parents=True, exist_ok=True)
-    body = build_index()
-    check_bold_delimiters(body, "docs/INDEX.md")
-    if INDEX_PATH.exists() and INDEX_PATH.read_text(encoding="utf-8") == body:
+    """填入 INDEX.md 的 clean 區塊。**只換標記之間，不覆寫整份文件。**
+
+    INDEX.md 從「整份產生」改成「標記式」，理由是它現在要同時容納兩條線：
+    clean 的表由本模組填，lite 的表由 render_lite 填，兩者不能互相覆寫。
+    整份產生的話，後跑的那個會把先跑的內容抹掉。
+
+    標記以外是手寫的導覽（兩份 RESULTS 的關係、哪些指標 lite 做不出來），
+    那段不是任何一條線的產物，渲染器碰不到它——同 RESULTS.md 的分工。
+    """
+    if not INDEX_PATH.exists():
+        raise FileNotFoundError(
+            f"找不到 {INDEX_PATH}。INDEX.md 的導覽由人撰寫，"
+            "渲染器只負責填標記之間的內容，不會憑空產生整份文件。"
+        )
+    original = INDEX_PATH.read_text(encoding="utf-8")
+    text = replace_block(original, "METRICS_CLEAN",
+                         build_metric_table("clean"), "docs/INDEX.md")
+    text = replace_block(text, "SUPPRESSION_CLEAN",
+                         build_suppression_block("clean"), "docs/INDEX.md")
+    check_bold_delimiters(text, "docs/INDEX.md")
+    if text == original:
         return False
-    INDEX_PATH.write_text(body, encoding="utf-8")
+    INDEX_PATH.write_text(text, encoding="utf-8")
     return True
 
 

@@ -79,6 +79,14 @@ HEAD_ROWS = 10
 # 但認不得「佔全體請求」這種寫成句子的欄名。
 EXTRA_RATIO_COLUMNS = {"佔全體請求", "佔比"}
 
+# 金額欄一律兩位小數。通則（依量級決定小數位）對錢是錯的：$2,729.09 會被印成
+# 2,729、$88.30 會被印成 88.3，而驗收條件是「成本總額仍是 $2,729.09」——
+# 讀者看到的數字必須就是那個數字，不能是四捨五入後長得差不多的另一個。
+# cost_per_request 不在此列：它遠小於 1，兩位小數會全部變成 0.00，
+# 走量級規則反而剛好（0.0083）。
+MONEY_SUFFIXES = ("_usd", "_cost")
+MONEY_COLUMNS = {"cost_per_user"}
+
 MISSING = "—"
 
 
@@ -96,6 +104,11 @@ def _is_count_column(column: str) -> bool:
     return name == "n" or name.startswith("n_")
 
 
+def _is_money_column(column: str) -> bool:
+    name = str(column)
+    return name in MONEY_COLUMNS or name.endswith(MONEY_SUFFIXES)
+
+
 def format_number(value: float, column: str) -> str:
     """比例固定 4 位；計數加千分位；其餘依量級決定小數位。
 
@@ -104,6 +117,8 @@ def format_number(value: float, column: str) -> str:
     """
     if _is_ratio_column(column):
         return f"{value:.4f}"
+    if _is_money_column(column):
+        return f"{value:,.2f}"
     # 整數值就印成整數。母數會以 float 存在（`值` 欄同時裝計數與時間戳），
     # 不特別處理的話 98 會印成 98.0、3 會印成 3.00。
     if _is_count_column(column) or float(value).is_integer():
@@ -159,19 +174,30 @@ def _row_label(row: pd.Series, columns: list[str]) -> str:
     return " / ".join(str(row[c]) for c in columns)
 
 
-def _footnotes(frame: pd.DataFrame, name: str | None) -> list[str]:
+def _footnotes(frame: pd.DataFrame, name: str | None,
+               displayed: list[str] | None = None,
+               suppressed_cells: set | None = None) -> list[str]:
     """把 suppression_reason 抽成表格下方的註腳。
 
     直接當一欄印會讓表寬到不能看，而且同一句話會重複幾十列。
 
     刻意不去重：兩列的理由真的相同時就該印兩行，合併會讓人以為
     只有一列被抑制。列標籤由 _key_columns() 決定，兩列才分得開。
+
+    displayed 與 suppressed_cells 一起給的時候，只有「這張表真的印出了某個
+    被抑制的格子」的列才會產生註腳。註腳的功能是解釋讀者眼前那個 `—`；
+    白名單把所有被抑制的欄都裁掉之後，那句話就沒有指涉對象了——讀者看到
+    一整列完好的數字配一句「本列的比例已抑制」，只會以為眼前的數字被動過。
+    兩者缺一（clean 那條路徑不傳 sidecar）就維持原行為，寧可多印。
     """
     if registry.REASON_COLUMN not in frame.columns:
         return []
     key_columns = _key_columns(frame, name)
     notes: list[str] = []
-    for _, row in frame.iterrows():
+    for index, row in frame.iterrows():
+        if displayed is not None and suppressed_cells is not None:
+            if not any((index, c) in suppressed_cells for c in displayed):
+                continue
         value = row[registry.REASON_COLUMN]
         # 從 csv 讀回來時，未抑制的空字串會變成 float nan。
         # 不先擋掉的話 str(nan) == "nan" 是真值，會產出「已抑制：nan」的假註腳。
@@ -186,12 +212,35 @@ def _footnotes(frame: pd.DataFrame, name: str | None) -> list[str]:
     return notes
 
 
-def _rows_to_markdown(frame: pd.DataFrame, columns: list[str]) -> list[str]:
-    lines = ["| " + " | ".join(str(c) for c in columns) + " |",
+def _rows_to_markdown(frame: pd.DataFrame, columns: list[str],
+                      rename: dict | None = None,
+                      suppressed_cells: set | None = None,
+                      na_marker: str | None = None) -> list[str]:
+    """rename **只換表頭**，不改欄名本身。
+
+    格式化規則是靠欄名認的（_share 結尾算比例、_usd 結尾算金額），
+    真的把欄位改名的話「成本（美元）」就不再符合 MONEY_SUFFIXES，
+    金額會退回量級規則印成 2,749 而不是 2,749.32。
+    """
+    rename = rename or {}
+    lines = ["| " + " | ".join(str(rename.get(c, c)) for c in columns) + " |",
              "| " + " | ".join("---" for _ in columns) + " |"]
-    for _, row in frame.iterrows():
-        lines.append("| " + " | ".join(
-            format_cell(row[c], c) for c in columns) + " |")
+    suppressed_cells = suppressed_cells or set()
+    for index, row in frame.iterrows():
+        cells = []
+        for column in columns:
+            value = row[column]
+            blank = value is None or (not isinstance(value, str)
+                                      and pd.isna(value))
+            if blank and na_marker is not None:
+                # 空格有兩種意思，印成同一個破折號等於把它們併成一件事：
+                #   被抑制   算得出來，但依集中度規則不給看
+                #   不適用   本來就沒有這個值（該列不在那個母體裡）
+                cells.append(MISSING if (index, column) in suppressed_cells
+                             else na_marker)
+            else:
+                cells.append(format_cell(value, column))
+        lines.append("| " + " | ".join(cells) + " |")
     return lines
 
 
@@ -220,13 +269,32 @@ def _annotation_mask(frame: pd.DataFrame, name: str | None) -> pd.Series:
     return mask
 
 
-def render_table(frame: pd.DataFrame, link: str | None, name: str) -> str:
+def render_table(frame: pd.DataFrame, link: str | None, name: str,
+                 data_dir: str = "data", columns: list | None = None,
+                 rename: dict | None = None,
+                 suppressed_cells: set | None = None,
+                 na_marker: str | None = None) -> str:
     """link 控制「完整資料」那行要不要出現；name 一定是指標名，
     因為 _key_columns() 得靠它查 group_by。兩者分開傳，避免
     「不發布 csv」這個決定順手把列標籤也降級成第一欄。
     """
-    columns = [c for c in frame.columns if c != registry.REASON_COLUMN]
-    notes = _footnotes(frame, name)
+    if columns is None:
+        display = [c for c in frame.columns if c != registry.REASON_COLUMN]
+    else:
+        unknown = [c for c in columns if c not in frame.columns]
+        if unknown:
+            raise ValueError(
+                f"{name} 沒有欄位 {unknown}；可用的是 {list(frame.columns)}。"
+                "欄位白名單寫錯只會少幾欄，表看起來仍然完整，所以直接 raise")
+        display = [c for c in columns if c != registry.REASON_COLUMN]
+    columns = display
+    # 註腳用**完整的** frame 算：_key_columns() 靠 spec.group_by 找列標籤，
+    # 而 group_by 宣告的欄位可能不在白名單裡。註腳不可因為**標籤欄**被裁掉
+    # 而消失——那是唯一說明「為什麼這格是 —」的地方。
+    #
+    # 但被抑制的欄整批被裁掉時就相反：那句話沒有任何指涉對象了。
+    # displayed 傳進去讓 _footnotes 自己判斷，見那邊的說明。
+    notes = _footnotes(frame, name, display, suppressed_cells)
 
     mask = _annotation_mask(frame, name)
     annotation = frame[mask]
@@ -234,28 +302,32 @@ def render_table(frame: pd.DataFrame, link: str | None, name: str) -> str:
 
     lines: list[str] = []
     if len(frame) <= COLLAPSE_THRESHOLD:
-        lines += _rows_to_markdown(frame, columns)
+        lines += _rows_to_markdown(frame, columns, rename,
+                                   suppressed_cells, na_marker)
     else:
         head = data_rows.head(HEAD_ROWS)
         tail = data_rows.iloc[HEAD_ROWS:]
-        lines += _rows_to_markdown(pd.concat([head, annotation]), columns)
+        lines += _rows_to_markdown(pd.concat([head, annotation]), columns,
+                                   rename, suppressed_cells, na_marker)
         lines += [
             "",
             f"<details><summary>其餘 {len(tail)} 列</summary>",
             "",
         ]
-        lines += _rows_to_markdown(tail, columns)
+        lines += _rows_to_markdown(tail, columns, rename,
+                                   suppressed_cells, na_marker)
         lines += ["", "</details>"]
 
     if notes:
         lines.append("")
         lines += notes
     if link:
-        lines += ["", f"完整資料：[{link}.csv](data/{link}.csv)"]
+        lines += ["", f"完整資料：[{link}.csv]({data_dir}/{link}.csv)"]
     return "\n".join(lines)
 
 
-def render_definition_list(frame: pd.DataFrame, name: str) -> str:
+def render_definition_list(frame: pd.DataFrame, name: str,
+                           data_dir: str = "data") -> str:
     """A 形狀專用：第一欄是標籤，不該撐成表格。"""
     label_column, value_columns = frame.columns[0], list(frame.columns[1:])
     note_column = "備註" if "備註" in value_columns else None
@@ -279,16 +351,22 @@ def render_definition_list(frame: pd.DataFrame, name: str) -> str:
             # 「— — 2026-07-21…」，兩個破折號一個是缺值一個是分隔符。
             line = f"- **{row[label_column]}**：{note or MISSING}"
         lines.append(line)
-    lines += ["", f"完整資料：[{name}.csv](data/{name}.csv)"]
+    lines += ["", f"完整資料：[{name}.csv]({data_dir}/{name}.csv)"]
     return "\n".join(lines)
 
 
-def render_block(frame: pd.DataFrame, name: str, publish_csv: bool = True) -> str:
+def render_block(frame: pd.DataFrame, name: str, publish_csv: bool = True,
+                 data_dir: str = "data", columns: list | None = None,
+                 rename: dict | None = None,
+                 suppressed_cells: set | None = None,
+                 na_marker: str | None = None) -> str:
     if frame.empty:
         return "_（本次執行沒有資料）_"
     if name in DEFINITION_LIST_METRICS:
-        return render_definition_list(frame, name)
-    return render_table(frame, name if publish_csv else None, name)
+        return render_definition_list(frame, name, data_dir=data_dir)
+    return render_table(frame, name if publish_csv else None, name,
+                        data_dir=data_dir, columns=columns, rename=rename,
+                        suppressed_cells=suppressed_cells, na_marker=na_marker)
 
 
 # ---------------------------------------------------------------------------
@@ -468,12 +546,33 @@ def render_results(run_id: str) -> dict:
     }
 
 
-def write_prose_numbers(run_id: str) -> Path:
-    from src import render_index
+# 有手寫散文的檔案。**這份清單要跟著文件長。**
+#
+# 2026-08-27 踩過：INDEX.md 從「整份產生」改成標記式之後才第一次有手寫散文，
+# 而這裡沒有跟著加，於是導覽裡一個過期的百分比完全沒被列出來。機制在、也正確
+# 運作，只是涵蓋範圍不含實際出問題的那個檔案——與「測試驗了一個不會被執行的
+# 路徑」是同一型的失效。
+PROSE_SOURCES = (
+    "docs/RESULTS.md",
+    "docs/RESULTS_lite.md",
+    "docs/OVERVIEW.md",
+    "docs/PROGRESS.md",
+    "docs/INDEX.md",
+    "README.md",
+)
 
-    sources = {"docs/RESULTS.md": RESULTS_PATH.read_text(encoding="utf-8")}
-    if render_index.README_PATH.exists():
-        sources["README.md"] = render_index.README_PATH.read_text(encoding="utf-8")
+
+def write_prose_numbers(run_id: str) -> Path:
+    """列出所有手寫散文裡的數字。**不存在的檔案跳過，不報錯。**
+
+    OVERVIEW.md 在清單裡但可能還沒建立——先登記後建立是對的順序：
+    反過來的話，建了檔案而忘記登記，就又是一次「防護沒跟著文件長」。
+    """
+    sources = {}
+    for name in PROSE_SOURCES:
+        path = config.PROJECT_ROOT / name
+        if path.exists():
+            sources[name] = path.read_text(encoding="utf-8")
     target = config.RUNS_DIR / run_id / "prose_numbers.txt"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(prose_number_report(sources), encoding="utf-8")
