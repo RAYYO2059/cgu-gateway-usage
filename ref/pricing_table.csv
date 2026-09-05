@@ -1,4 +1,27 @@
-﻿model_family,effective_date,context_tier,input_price_per_1k,input_confidence,cached_input_price_per_1k,cached_input_confidence,cache_write_price_per_1k,cache_write_confidence,output_price_per_1k,output_confidence,expires_at,note,source_url,fetched_at
+﻿# 牌價表。單位是「每 1,000 token」，官方頁面標的是每 1M，填入前一律除以 1000。
+# 空白欄的意義依情況不同，三種都不是「還沒查」：
+#
+# 1. 本地模型不列入本表。判定在 pricing.py 的 LOCAL_PROVIDERS，依 provider 不依
+#    模型名——新增一個 ollama 模型不必改這張表就會被正確歸成 unpriced_local。
+#    表裡若出現本地模型的列（skeleton 產生的），四個價格欄一律留空。
+#
+# 2. 非 token 計價的端點（/v1/images/*、/v1/audio/*）在表中留空並在 note 欄註記
+#    「已檢視，不需價目」。那是**查過**的痕跡不是未查——少了它，下一個人看到空白
+#    分不出是哪一種。理由同 backfilled: true。
+#
+# 3. pro 型號沒有快取讀價位（官方頁面該欄標「—」），留空而不是填 0。
+#
+# 為什麼要把有 token 的模型全部補齊，即使某個只佔 0.2%：
+#   資料會持續擴充而模型組合會變。現在佔 0.2% 的模型下個月可能佔 20%，而那時候
+#   不會有人回頭補價——因為 unpriced_no_table 只有一千多筆的時候沒人會去看它。
+#   更重要的是那個桶的診斷能力：它的意思是「有 token、該計價、但查不到牌價」，
+#   那是要行動的訊號。長期養著 40 幾個模型的話，訊號會變成背景噪音，下次真的冒出
+#   一個吃掉大量 token 的新模型時會沒人注意。清到接近零，它才叫得出聲。
+#   補價的成本也是現在最低：現在補是查現價，三個月後補是考古（官方頁面只列現價，
+#   歷史價得靠規律推——gpt-5.6-sol 的 8/22 前快取寫入價就是這樣推出來的）。
+#
+# 每一列都必須有 source_url 與 fetched_at。有價格卻沒有 confidence 會直接 raise。
+model_family,effective_date,context_tier,input_price_per_1k,input_confidence,cached_input_price_per_1k,cached_input_confidence,cache_write_price_per_1k,cache_write_confidence,output_price_per_1k,output_confidence,expires_at,note,source_url,fetched_at
 gpt-5.4-mini,,short,0.00075,confirmed,7.5e-05,confirmed,,,0.0045,confirmed,,,https://developers.openai.com/api/docs/pricing,2026-08-26
 gpt-5.6-sol,,short,0.005,confirmed,0.0005,confirmed,0.00625,inferred,0.03,confirmed,,只有 cache_write 是推估：官方頁面只列現價，而 5.6 家族現行三列的快取寫入恰為標準輸入的 1.25 倍（sol 4.00→5.00、terra 2.00→2.50、luna 0.20→0.25），多個來源指出該比例自 2026-07-09 上市即適用。輸入／快取讀／輸出三個價位皆為官方明列。,https://developers.openai.com/api/docs/pricing,2026-08-26
 gpt-5.6-sol,2026-08-22,short,0.004,promotional,0.0004,promotional,0.005,promotional,0.02,promotional,2026-11-21,整列為促銷價（含快取寫入），官方標示至少維持到 2026-11-21。之後以更新的價目表重算會變。,https://developers.openai.com/api/docs/pricing,2026-08-26
@@ -20,48 +43,48 @@ gpt-5.5,,long,0.01,confirmed,0.001,confirmed,,,0.045,confirmed,,,https://develop
 gpt-5.4,,long,0.005,confirmed,0.0005,confirmed,,,0.0225,confirmed,,,https://developers.openai.com/api/docs/pricing,2026-08-26
 bge-m3,,short,,,,,,,,,,,https://developers.openai.com/api/docs/pricing,2026-08-26
 bge-m3:latest,,short,,,,,,,,,,,https://developers.openai.com/api/docs/pricing,2026-08-26
-chat-latest,,short,,,,,,,,,,,https://developers.openai.com/api/docs/pricing,2026-08-26
+chat-latest,,short,0.005,provisional,0.0005,provisional,,,0.03,provisional,,官方頁面列有此名（ChatGPT 類）。但它是浮動別名，指向的實際模型會改變，而 lite schema 無 response_model 欄，無法逐筆確認實際服務的模型。本資料期間內 37 筆中 27 筆回 200（含 token）、9 筆 400、1 筆 429，顯示該別名在部分路徑上可解析。對應關係未經確認。,https://developers.openai.com/api/docs/pricing,2026-08-27
 chatgpt-image-latest,,short,,,,,,,,,,,https://developers.openai.com/api/docs/pricing,2026-08-26
 deepseek-ocr:latest,,short,,,,,,,,,,,https://developers.openai.com/api/docs/pricing,2026-08-26
 glm-ocr:latest,,short,,,,,,,,,,,https://developers.openai.com/api/docs/pricing,2026-08-26
-gpt-4.1-mini,,short,,,,,,,,,,,https://developers.openai.com/api/docs/pricing,2026-08-26
-gpt-4.1-nano,,short,,,,,,,,,,,https://developers.openai.com/api/docs/pricing,2026-08-26
-gpt-4o,,short,,,,,,,,,,,https://developers.openai.com/api/docs/pricing,2026-08-26
-gpt-4o-mini-tts,,short,,,,,,,,,,,https://developers.openai.com/api/docs/pricing,2026-08-26
-gpt-5,,short,,,,,,,,,,,https://developers.openai.com/api/docs/pricing,2026-08-26
+gpt-4.1-mini,,short,0.0004,confirmed,0.0001,confirmed,,,0.0016,confirmed,,,https://developers.openai.com/api/docs/pricing,2026-08-27
+gpt-4.1-nano,,short,0.0001,confirmed,2.5e-05,confirmed,,,0.0004,confirmed,,,https://developers.openai.com/api/docs/pricing,2026-08-27
+gpt-4o,,short,0.0025,confirmed,0.00125,confirmed,,,0.01,confirmed,,,https://developers.openai.com/api/docs/pricing,2026-08-27
+gpt-4o-mini-tts,,short,,,,,,,,,,非 token 計價，由端點判定（/v1/audio/speech）。已檢視，不需價目。,https://developers.openai.com/api/docs/pricing,2026-08-27
+gpt-5,,short,0.00125,confirmed,0.000125,confirmed,,,0.01,confirmed,,,https://developers.openai.com/api/docs/pricing,2026-08-27
 gpt-5-chat-latest,,short,,,,,,,,,,,https://developers.openai.com/api/docs/pricing,2026-08-26
 gpt-5-codex,,short,,,,,,,,,,,https://developers.openai.com/api/docs/pricing,2026-08-26
-gpt-5-mini,,short,,,,,,,,,,,https://developers.openai.com/api/docs/pricing,2026-08-26
-gpt-5-nano,,short,,,,,,,,,,,https://developers.openai.com/api/docs/pricing,2026-08-26
-gpt-5.1,,short,,,,,,,,,,,https://developers.openai.com/api/docs/pricing,2026-08-26
+gpt-5-mini,,short,0.00025,confirmed,2.5e-05,confirmed,,,0.002,confirmed,,,https://developers.openai.com/api/docs/pricing,2026-08-27
+gpt-5-nano,,short,5e-05,confirmed,5e-06,confirmed,,,0.0004,confirmed,,,https://developers.openai.com/api/docs/pricing,2026-08-27
+gpt-5.1,,short,0.00125,confirmed,0.000125,confirmed,,,0.01,confirmed,,,https://developers.openai.com/api/docs/pricing,2026-08-27
 gpt-5.1-chat-latest,,short,,,,,,,,,,,https://developers.openai.com/api/docs/pricing,2026-08-26
 gpt-5.1-codex,,short,,,,,,,,,,,https://developers.openai.com/api/docs/pricing,2026-08-26
 gpt-5.1-codex-max,,short,,,,,,,,,,,https://developers.openai.com/api/docs/pricing,2026-08-26
 gpt-5.2-codex,,short,,,,,,,,,,,https://developers.openai.com/api/docs/pricing,2026-08-26
-gpt-5.2-pro,,short,,,,,,,,,,,https://developers.openai.com/api/docs/pricing,2026-08-26
+gpt-5.2-pro,,short,0.021,confirmed,,,,,0.168,confirmed,,pro 型號不支援 prompt caching，同 gpt-5.5-pro,https://developers.openai.com/api/docs/pricing,2026-08-27
 gpt-5.3-chat-latest,,short,,,,,,,,,,,https://developers.openai.com/api/docs/pricing,2026-08-26
-gpt-5.4-nano,,short,,,,,,,,,,,https://developers.openai.com/api/docs/pricing,2026-08-26
-gpt-5.4-pro,,short,,,,,,,,,,,https://developers.openai.com/api/docs/pricing,2026-08-26
-gpt-5.5-pro,,short,,,,,,,,,,,https://developers.openai.com/api/docs/pricing,2026-08-26
+gpt-5.4-nano,,short,0.0002,confirmed,2e-05,confirmed,,,0.00125,confirmed,,,https://developers.openai.com/api/docs/pricing,2026-08-27
+gpt-5.4-pro,,short,0.03,confirmed,,,,,0.18,confirmed,,pro 型號不支援 prompt caching，同 gpt-5.5-pro,https://developers.openai.com/api/docs/pricing,2026-08-27
+gpt-5.5-pro,,short,0.03,confirmed,,,,,0.18,confirmed,,pro 型號不支援 prompt caching，官方頁面該欄標「—」，因此快取讀留空而不是填 0,https://developers.openai.com/api/docs/pricing,2026-08-27
 gpt-5.6,,short,,,,,,,,,,,https://developers.openai.com/api/docs/pricing,2026-08-26
 gpt-image-1,,short,,,,,,,,,,,https://developers.openai.com/api/docs/pricing,2026-08-26
 gpt-image-1-mini,,short,,,,,,,,,,,https://developers.openai.com/api/docs/pricing,2026-08-26
 gpt-image-1.5,,short,,,,,,,,,,,https://developers.openai.com/api/docs/pricing,2026-08-26
-gpt-image-2,,short,,,,,,,,,,,https://developers.openai.com/api/docs/pricing,2026-08-26
+gpt-image-2,,short,,,,,,,,,,非 token 計價，由端點判定（/v1/images/*）。已檢視，不需價目。,https://developers.openai.com/api/docs/pricing,2026-08-27
 gpt-oss:20b,,short,,,,,,,,,,,https://developers.openai.com/api/docs/pricing,2026-08-26
 gpt-realtime-2,,short,,,,,,,,,,,https://developers.openai.com/api/docs/pricing,2026-08-26
 gpt-realtime-2.1,,short,,,,,,,,,,,https://developers.openai.com/api/docs/pricing,2026-08-26
 gpt-realtime-2.1-mini,,short,,,,,,,,,,,https://developers.openai.com/api/docs/pricing,2026-08-26
 gpt-realtime-mini,,short,,,,,,,,,,,https://developers.openai.com/api/docs/pricing,2026-08-26
-o1,,short,,,,,,,,,,,https://developers.openai.com/api/docs/pricing,2026-08-26
-o3,,short,,,,,,,,,,,https://developers.openai.com/api/docs/pricing,2026-08-26
+o1,,short,0.015,confirmed,0.0075,confirmed,,,0.06,confirmed,,,https://developers.openai.com/api/docs/pricing,2026-08-27
+o3,,short,0.002,confirmed,0.0005,confirmed,,,0.008,confirmed,,,https://developers.openai.com/api/docs/pricing,2026-08-27
 o3-deep-research,,short,,,,,,,,,,,https://developers.openai.com/api/docs/pricing,2026-08-26
-o3-mini,,short,,,,,,,,,,,https://developers.openai.com/api/docs/pricing,2026-08-26
-o4-mini,,short,,,,,,,,,,,https://developers.openai.com/api/docs/pricing,2026-08-26
+o3-mini,,short,0.0011,confirmed,0.00055,confirmed,,,0.0044,confirmed,,,https://developers.openai.com/api/docs/pricing,2026-08-27
+o4-mini,,short,0.0011,confirmed,0.000275,confirmed,,,0.0044,confirmed,,,https://developers.openai.com/api/docs/pricing,2026-08-27
 o4-mini-deep-research,,short,,,,,,,,,,,https://developers.openai.com/api/docs/pricing,2026-08-26
-text-embedding-3-small,,short,,,,,,,,,,,https://developers.openai.com/api/docs/pricing,2026-08-26
-text-embedding-ada-002-v2,,short,,,,,,,,,,,https://developers.openai.com/api/docs/pricing,2026-08-26
+text-embedding-3-small,,short,2e-05,confirmed,,,,,,,,,https://developers.openai.com/api/docs/pricing,2026-08-27
+text-embedding-ada-002-v2,,short,0.0001,provisional,,,,,,,,資料中的 model_family 是 text-embedding-ada-002-v2，官方頁面只列 text-embedding-ada-002（無 -v2 後綴）。價格取後者，對應關係未經確認。,https://developers.openai.com/api/docs/pricing,2026-08-27
 translategemma:latest,,short,,,,,,,,,,,https://developers.openai.com/api/docs/pricing,2026-08-26
 tts-1,,short,,,,,,,,,,,https://developers.openai.com/api/docs/pricing,2026-08-26
 tts-1-hd,,short,,,,,,,,,,,https://developers.openai.com/api/docs/pricing,2026-08-26
-whisper-1,,short,,,,,,,,,,,https://developers.openai.com/api/docs/pricing,2026-08-26
+whisper-1,,short,,,,,,,,,,非 token 計價，由端點判定（/v1/audio/transcriptions）。已檢視，不需價目。,https://developers.openai.com/api/docs/pricing,2026-08-27

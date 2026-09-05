@@ -243,3 +243,48 @@ def _main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(_main())
+
+
+# ---------------------------------------------------------------------------
+# 出貨的那張表本身
+# ---------------------------------------------------------------------------
+def test_實際出貨的價目表載得起來():
+    """上面所有測試都是拿合成的表在跑，沒有一個碰過 ref/pricing_table.csv。
+
+    這個缺口真的咬過一次：2026-08-27 在表頭加了 # 註解說明空白欄的意義，
+    14 個測試全部通過，而正式載入器 from_csv() 直接 raise——因為 csv.DictReader
+    把註解行當成了標頭。**測試綠燈與程式能不能讀那張表是兩件事。**
+    """
+    table = pricing.PricingTable.from_csv()
+    assert table is not None
+
+
+def test_出貨的價目表能算出金額():
+    """能載入不等於能用：欄位齊全但價格全空的表也載得起來。"""
+    table = pricing.PricingTable.from_csv()
+    row = {
+        "provider": "openai",
+        "endpoint": "/v1/chat/completions",
+        "model_returned": "gpt-4o",
+        "prompt_tokens": 1000,
+        "cached_tokens": 0,
+        "completion_tokens": 1000,
+        "date_taipei": "2026-08-20",
+    }
+    estimate = pricing.estimate_cost(row, table)
+    assert estimate.pricing_status == pricing.STATUS_PRICED
+    # gpt-4o：輸入 $2.50/1M、輸出 $10.00/1M → 1k + 1k = 0.0025 + 0.01
+    assert round(estimate.cost, 6) == 0.0125
+
+
+def test_檔頭註解不會吃掉資料列():
+    """只吃標頭之前的註解行，不是全檔過濾。"""
+    table = pricing.PricingTable.from_csv()
+    families = set()
+    for value in vars(table).values():
+        if isinstance(value, dict):
+            families.update(str(k) for k in value)
+        elif isinstance(value, list):
+            families.update(str(getattr(r, "model_family", "")) for r in value)
+    # 表頭註解裡出現過這些名字，若被當成資料列會混進來
+    assert not any(f.startswith("#") for f in families), "註解行被當成資料列"

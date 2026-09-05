@@ -62,6 +62,7 @@
 from __future__ import annotations
 
 import csv
+import io
 import logging
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -415,7 +416,14 @@ class PricingTable:
                 f"找不到價目表 {path}。\n"
                 f"這張表是人工維護的，欄位為 {', '.join(PRICING_COLUMNS)}。"
             )
-        with path.open(encoding="utf-8-sig", newline="") as handle:
+        # 檔頭可以有 # 註解行，說明空白欄的三種意義（見該檔開頭）。
+        # **只吃掉標頭之前的註解**，不是全檔過濾：note 欄若有跨行的引號內容，
+        # 其中一行剛好以 # 開頭就會被誤刪，而那種錯不會報，只會少一列價目。
+        lines = path.read_text(encoding="utf-8-sig").splitlines(keepends=True)
+        start = 0
+        while start < len(lines) and lines[start].lstrip().startswith("#"):
+            start += 1
+        with io.StringIO("".join(lines[start:]), newline="") as handle:
             reader = csv.DictReader(handle)
             header = reader.fieldnames or []
             missing = [c for c in PRICING_COLUMNS if c not in header]
@@ -629,8 +637,16 @@ def confidence_breakdown(result):
     ----------------------------------------
     一筆請求的金額由四段組成，四段的價目來源可以不同。8/22 前的
     gpt-5.6-sol 只有快取寫入是推估價，其餘三段都是官方明列——整筆算成
-    inferred 會得出「50.2% 的金額建立在推估價上」，而按段加權的實際值是
-    13.6%。前者會讓讀者質疑整份估算，而那個質疑是我們自己製造的。
+    inferred 會得出「51.8% 的金額建立在推估價上」（$1,424.65），而按段
+    加權的實際值是 13.55%（$372.40）。前者會讓讀者質疑整份估算，而那個
+    質疑是我們自己製造的。
+
+    這兩個數字本身也是一課：初次寫下時記的是 50.2% / $1,369.89，那是
+    **價目表補齊 12 個 model_family 之前**算的——當時有一批請求還落在
+    unpriced_no_table，沒有金額可以歸屬到任何一桶，總額也還不是
+    $2,749.32。補齊之後整列歸屬的金額升到 $1,424.65。**兩個版本的對比
+    才是本函式存在的理由，所以舊值留著當對照，不是刪掉換新的。**
+    要重現舊值需要同時回退價目表，光看程式看不出來。
 
     代價是**同一筆請求會同時出現在多個桶裡**（它的錢確實一部分來自明列價、
     一部分來自推估價），所以「涉及筆數」那一欄跨列相加會超過總筆數。
