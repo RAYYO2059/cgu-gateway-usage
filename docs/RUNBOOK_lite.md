@@ -190,8 +190,8 @@ lite 這邊要看 `ref/lite_user_registry.csv` 的 `dept_code` 欄。
 
 補表時要確認 `dept_key`：研究所代碼可能與同系所的大學部代碼不同（生醫 09／01、
 醫工 26／31、人工智慧 28／61），成對的兩個代碼要填同一個 `dept_key`，否則同一個系
-會被切成兩個。見 [DESIGN_NOTES.md](DESIGN_NOTES.md) 的〈同一個系所在不同學制使用
-不同的系代號〉。
+會被切成兩個。見 `docs/DESIGN_NOTES.md` 的〈同一個系所在不同學制使用不同的系代號〉
+（該檔在 .gitignore 內，未隨 repo 公開）。
 
 ### 3. 有沒有新的模型
 
