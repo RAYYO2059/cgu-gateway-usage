@@ -304,6 +304,44 @@ def format_partition_coverage(table: pd.DataFrame) -> str:
 
 
 # ---------------------------------------------------------------------------
+# 子集計數的健全性
+# ---------------------------------------------------------------------------
+def check_subset_counts(total: int, parts: dict[str, float], *,
+                        label: str = "子集", exclusive: bool = False) -> list[str]:
+    """任何子集的筆數都不得超過母體。回傳問題清單，空清單代表沒問題。
+
+    這條抓的是一整類錯誤，不是某一個 bug：
+    **把數值欄當成旗標欄加總**、重複計數、分組時漏去重。它們的共同症狀是
+    「某個計數超過母體」，而共同的隱蔽性是——只要數字剛好落在母體以內，
+    就完全看不出來。
+
+    實際發生過：前置規則的統計用 ``startswith("tool_")`` 掃欄位，把 schema
+    本身的 ``tool_count``（agent 工具呼叫次數，整數欄）當成旗標，``.sum()``
+    加的是次數不是筆數，算出 383,678「筆」而母體只有 106,993。這次因為超出
+    母體所以立刻露餡；如果那支腳本的工具呼叫次數少一點、總和落在 10 萬以內，
+    這個錯會安靜地讓 token 佔比灌到 59%、成本多算 $700，而且看起來完全合理。
+
+    exclusive=True 時另外檢查「互斥分組的總和不得超過母體」——前置規則與
+    分類結果都是互斥指派，總和超過母體代表有列被指到兩類。
+    """
+    problems: list[str] = []
+    for name, count in parts.items():
+        if count > total:
+            problems.append(
+                f"{label} {name!r} 的計數 {count:,.0f} 超過母體 {total:,}"
+                "——可能把數值欄當成旗標加總、重複計數、或分組時漏去重"
+            )
+    if exclusive:
+        summed = sum(parts.values())
+        if summed > total:
+            problems.append(
+                f"{label} 各組總和 {summed:,.0f} 超過母體 {total:,}"
+                f"（多出 {summed - total:,.0f}）——互斥指派不該重疊"
+            )
+    return problems
+
+
+# ---------------------------------------------------------------------------
 # 警告類檢查
 # ---------------------------------------------------------------------------
 def run_warning_checks(frame: pd.DataFrame) -> list[str]:
@@ -358,7 +396,16 @@ def run_warning_checks(frame: pd.DataFrame) -> list[str]:
             "學院歸屬會變成不確定，須人工確認"
         )
 
-    # 檢查 5：分區完整度。頭尾殘日是時區邊界的必然結果、不是錯誤，
+    # 檢查 5：子集計數健全性。拿幾個天然的互斥分組當自我檢查——
+    # 它們理應永遠通過，一旦沒通過就代表 groupby 或 dtype 出了更基本的問題。
+    for column in ("provider", "request_style", "date_taipei"):
+        counts = frame[column].value_counts(dropna=False).to_dict()
+        problems = check_subset_counts(
+            len(frame), {str(k): v for k, v in counts.items()},
+            label=column, exclusive=True)
+        warnings.extend(problems)
+
+    # 檢查 6：分區完整度。頭尾殘日是時區邊界的必然結果、不是錯誤，
     # 所以這裡只警告；但中間出現 partial 就代表上游漏了東西或當時中斷過。
     coverage = partition_coverage(frame)
     partial = coverage[coverage["is_partial"]]

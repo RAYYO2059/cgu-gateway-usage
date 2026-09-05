@@ -170,11 +170,18 @@ def cmd_metrics(args: argparse.Namespace) -> int:
             render_index.run(line="clean")
         return 0 if (summary["狀態"] == "成功").all() else 1
 
-    from src import render_results
+    # 兩條線的 publish 走不同的 renderer。lite 不能走 render_results.run()：
+    # 那條路徑會呼叫 render_index.run()（斷言只收 clean），也會把 docs/data/
+    # 與 README.md 一起改寫——那些是 clean 的產物。
+    line = getattr(args, "line", "clean")
+    if line == "lite":
+        from src import render_lite as publisher
+    else:
+        from src import render_results as publisher
 
     manifest.stage("publish")
     try:
-        render_results.run(run_id)
+        publisher.run(run_id)
     except FileNotFoundError as exc:
         logger.error("metrics --publish: %s", exc)
         return 1

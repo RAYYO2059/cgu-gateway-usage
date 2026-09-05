@@ -42,6 +42,9 @@ EXEMPT_DIMENSIONS_LITE = (
     "model_family",   # 模型
     "provider",       # openai / ollama
     "hour_taipei",    # 一天的第幾小時
+    # 日期與時段同性質：它分的是請求不是人。抑制它會把「這一天只有 9 個人
+    # 在用」這個事實抹掉，而那正是判讀最後一天完不完整所需要的訊息。
+    "date_taipei",    # 台北曆日
     "status_code",    # HTTP 狀態碼
 )
 

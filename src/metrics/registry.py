@@ -323,6 +323,15 @@ def apply_suppression(
             mask = result.data[dimension].astype(str) == str(row.分組值)
             if not mask.any():
                 continue
+            # **只記真的被改動的欄位。** 有些格子在抑制之前就是 NA——
+            # 那不是「算得出來但不給看」，是「本來就沒有這個值」（例如服務憑證
+            # 的 attributable_share：它不在可歸屬母體裡）。兩者印出來都是同一個
+            # 破折號，讀者無從分辨，而它們的意思相反。
+            #
+            # 分辨的資訊只存在於這一刻——賦值之後就永遠分不出來了，
+            # 所以要在覆蓋前先算。
+            changed = [c for c in ratio_columns
+                       if result.data.loc[mask, c].notna().any()]
             result.data.loc[mask, ratio_columns] = pd.NA
             reasons = []
             if row.below_min_group_size:
@@ -337,7 +346,7 @@ def apply_suppression(
                 "維度": dimension,
                 "分組值": str(row.分組值),
                 "原因": reason,
-                "被抑制欄位": ",".join(map(str, ratio_columns)),
+                "被抑制欄位": ",".join(map(str, changed)),
             })
 
     # 有彙總列時據實說明抑制擋不住，只加在真的被抑制的列上——
