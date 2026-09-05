@@ -3,7 +3,14 @@
 對照表在 ``ref/college_mapping.csv``，人工維護，來源是獎學金公告整理出的
 系代號清單。一列描述「某個系代號在某段學年區間屬於哪個學院」：
 
-    dept_code, dept_name, college, effective_year_start, effective_year_end
+    dept_code, dept_name, college, degrees, dept_key,
+    effective_year_start, effective_year_end
+
+其中 ``degrees``（該代碼適用的學制，BMD／B／MD）與 ``dept_key``（系所身分）
+是後來補的，理由見底下「同系所在不同學制使用不同代碼」一節。
+**``degrees`` 是文件不是查詢鍵**：沒有任何查詢會讀它，它存在的目的是讓下次
+看這張表的人知道某個代碼為什麼只涵蓋一部分的人。``dept_key`` 相反，它是真的
+會被拿去算的——「單系學院」那類以系所為單位的判定必須數它而不是數代碼。
 
 兩個正規化決定，都是為了避免安靜的錯誤：
 
@@ -69,6 +76,9 @@ tests/test_college.py 的 test_轉系的五筆都在同一學院內 固定下來
 報表中出現這個學院時**必須加註記**，見 SINGLE_DEPT_COLLEGES 與
 is_single_dept_college()。
 
+注意它在對照表裡佔**兩列**（28 大學部、61 碩博士），但仍然只是一個系——
+判斷單系與否要數 dept_key 而不是數 dept_code，見下一節。
+
 
 代碼 28 的沿革
 ---------------
@@ -78,6 +88,38 @@ is_single_dept_college()。
 
 因此對照表只列一列、effective_year 兩端留空。若當成代碼重用而拆成兩列，
 111 學年那批人會被切到另一組去，而他們其實一直是同一個單位的學生。
+
+
+同系所在不同學制使用不同代碼
+-----------------------------
+三個系的大學部與碩博士班用**不同的系代號**：
+
+    生醫       大學部 09    碩博士 01
+    醫工       大學部 26    碩博士 31
+    人工智慧   大學部 28    碩博士 61
+
+這解釋了先前那個看起來很奇怪的觀察——對不到學院的 24 個人**全部是碩博士
+生、一個大學部都沒有**。當時的解釋是「研究所有獨立的編碼區間」，那只說對了
+一半：真正的成因是這三個系換了代碼，再加上五個研究所專屬的所／學程
+（00 臨醫、17 免疫、40 管研、15 生物科技產業、32 奈米工程設計）。
+
+含意在於**對照表的鍵不等於系所身分**。dept_code 仍然是唯一鍵（沒有任何代碼
+在不同學制下指向不同系所，所以 dept_to_college() 不需要知道學制），但「這個
+學院底下有幾個系」這種以系所為單位的問題不能用代碼去數：智慧運算學院有 28
+與 61 兩個代碼，卻只有一個系。dept_key 就是為此存在的——成對的代碼共用同一
+個值，取其大學部代碼。
+
+（``degrees`` 欄記的是「這個代碼給誰用」，來源是系所代碼表本身，不是從使用
+者資料反推的。09/26/28 標成 B、八個研究所代碼標成 MD，這兩組有來源可依。
+其餘 17 列沒有來源，分兩種處理：11 列能在 lite registry 裡看到實際的 M 或 D
+使用者，標 BMD；另外 6 列（02、06、08、41、42、43）在這批資料裡只看得到大
+學部、或根本沒有人用過，標 ``(未查證)``。
+
+**沒查過就不要填一個看起來合理的值。** 六列全填 BMD 的話，讀表的人分不出
+「查過，確實三個學制共用」與「沒查過，填了個最常見的值」——前者是資訊，
+後者是雜訊，而它們長得一模一樣。這一欄不參與任何查詢，填錯不會讓任何數字
+變錯，但會讓下一個人以為這件事已經有人確認過了。判準與 UNMAPPED 不回 None、
+與未定價的金額不填 0 相同。）
 """
 
 from __future__ import annotations
@@ -95,9 +137,23 @@ MAPPING_PATH = config.REF_DIR / "college_mapping.csv"
 REGISTRY_PATH = config.REF_DIR / "user_registry.csv"
 
 MAPPING_COLUMNS = (
-    "dept_code", "dept_name", "college",
+    "dept_code", "dept_name", "college", "degrees", "dept_key",
     "effective_year_start", "effective_year_end",
 )
+
+# degrees 欄的合法值。B = 只給大學部，MD = 只給碩博士，BMD = 三者共用一個代碼。
+# 這一欄不參與查詢（見模組 docstring），列舉出來只是為了讓打錯字被驗出來。
+DEGREES_SOURCED = frozenset({"BMD", "B", "MD"})
+
+# 「還沒查證過這個代碼給誰用」。與 UNMAPPED、與未定價不填 0 同一個判斷：
+# 不知道要看得出來是不知道。
+#
+# 具體要擋的是這件事：把沒查過的代碼一律填 BMD，讀表的人沒有任何線索可以
+# 分辨「查過，確實三個學制共用」與「沒查過，填了個看起來最常見的值」。
+# 前者是資訊，後者是雜訊，而它們長得一模一樣。
+DEGREES_UNVERIFIED = "(未查證)"
+
+DEGREES_VALUES = DEGREES_SOURCED | {DEGREES_UNVERIFIED}
 
 # 查不到時的回傳值。刻意不是 None：下游多半直接拿去 groupby，
 # None 會被 pandas 當成 NA 丟掉，該組資料就這樣無聲消失。
@@ -105,6 +161,10 @@ UNMAPPED = "(未對應)"
 
 # 底下只有一個系的學院。這種學院的「學院層級」數字等同系所層級，
 # 與其他學院並排時粒度不對等，報表必須加註記（見模組 docstring）。
+#
+# 「只有一個系」數的是**相異 dept_key 而不是 dept_code**：智慧運算學院有 28
+# 與 61 兩個代碼，但那是同一個系的兩個學制。用代碼去數會判定它不再是單系學院，
+# 於是註記默默消失——而該學院的粒度問題一點都沒有改變。
 SINGLE_DEPT_COLLEGES = frozenset({"智慧運算學院"})
 
 
@@ -158,6 +218,10 @@ class MappingEntry:
     year_end: int | None    # None = 不設上限
     line_no: int            # csv 的實際行號，報問題時給人對照用
     raw_dept_code: str = "" # 正規化前的原字串，用來提醒前導零被壓掉了
+    degrees: str = ""       # BMD / B / MD，是文件不是查詢鍵
+    # 系所身分。成對的代碼（09 與 01、26 與 31、28 與 61）共用同一個值。
+    # 留空時 load_mapping() 會填成 dept_code 自己。
+    dept_key: str = ""
 
     def covers(self, year: int | None) -> bool:
         """該列是否適用於某個入學學年。
@@ -293,6 +357,10 @@ def load_mapping(path: Path | None = None) -> list[MappingEntry]:
             code = normalize_dept_code(row.get("dept_code"))
             if code is None:
                 continue  # 整列空白（例如檔尾多按的 enter），不算問題
+            # dept_key 走同一套正規化：它也是系代號，同樣會被 Excel 壓掉前導零。
+            # 留空的列預設指向自己——絕大多數系所只有一個代碼，
+            # 逼每一列都手寫一次只會多一個打錯字的機會。
+            key = normalize_dept_code(row.get("dept_key")) or code
             entries.append(MappingEntry(
                 dept_code=code,
                 dept_name=(row.get("dept_name") or "").strip(),
@@ -301,6 +369,8 @@ def load_mapping(path: Path | None = None) -> list[MappingEntry]:
                 year_end=normalize_year(row.get("effective_year_end")),
                 line_no=line_no,
                 raw_dept_code=str(row.get("dept_code") or "").strip(),
+                degrees=(row.get("degrees") or "").strip().upper(),
+                dept_key=key,
             ))
     return entries
 
@@ -367,6 +437,26 @@ def dept_to_college(
     return UNMAPPED
 
 
+def dept_keys_by_college(
+    entries: list[MappingEntry] | None = None,
+) -> dict[str, set[str]]:
+    """學院 → 該學院底下的相異**系所身分**（dept_key）集合。
+
+    刻意回 dept_key 而不是 dept_code：一個系可能因為大學部與碩博士班分開編碼
+    而佔兩個代碼（09/01、26/31、28/61），數代碼會把它算成兩個系。
+    「這個學院底下有幾個系」只有數 dept_key 才答得對。
+
+    沒有 college 的列（欄位空白）直接跳過——它連屬於哪個學院都不知道，
+    放進來只會多一個叫做「」的學院。
+    """
+    entries = load_mapping() if entries is None else entries
+    out: dict[str, set[str]] = {}
+    for entry in entries:
+        if entry.college:
+            out.setdefault(entry.college, set()).add(entry.dept_key)
+    return out
+
+
 def is_single_dept_college(college: object) -> bool:
     """該學院底下是否只有一個系。
 
@@ -406,6 +496,11 @@ def validate_mapping(mapping: list[MappingEntry]) -> MappingProblems:
             found.append("college 空白")
         if not entry.dept_name:
             found.append("dept_name 空白")
+        if entry.degrees not in DEGREES_VALUES:
+            found.append(
+                f"degrees {entry.degrees!r} 不在 {sorted(DEGREES_VALUES)} 之中")
+        if not entry.dept_key.isdigit() or len(entry.dept_key) != 2:
+            found.append(f"dept_key {entry.dept_key!r} 不是 2 碼數字")
         if (entry.year_start is not None and entry.year_end is not None
                 and entry.year_start > entry.year_end):
             found.append(f"學年區間顛倒（{entry.year_start} > {entry.year_end}）")
@@ -418,6 +513,43 @@ def validate_mapping(mapping: list[MappingEntry]) -> MappingProblems:
             problems.notes.append(
                 f"第 {entry.line_no} 行 dept_code 寫成 {entry.raw_dept_code!r}，"
                 f"已當作 {entry.dept_code!r} 處理（前導零被 Excel 壓掉了）")
+
+    # --- dept_key 的兩條不變量 ---
+    #
+    # 這兩條都不是形式檢查而是語意檢查：dept_key 一旦不一致，
+    # 「單系學院」這類以系所為單位的判定就會靜默地算錯——不會有例外，
+    # 只會有一個少了註記的報表。
+    known_codes = {e.dept_code for e in mapping}
+    key_of_code = {e.dept_code: e.dept_key for e in mapping}
+    by_key: dict[str, list[MappingEntry]] = {}
+    for entry in mapping:
+        by_key.setdefault(entry.dept_key, []).append(entry)
+
+    for code, group in sorted(_group_by_code(mapping).items()):
+        keys = {e.dept_key for e in group}
+        if len(keys) > 1:
+            problems.conflicts.append(
+                f"{code}：同一個代碼被指到多個 dept_key {sorted(keys)}，"
+                f"代碼與系所身分必須是多對一")
+
+    for key, group in sorted(by_key.items()):
+        if key not in known_codes:
+            problems.conflicts.append(
+                f"dept_key {key} 沒有對應的 dept_code 列"
+                f"（由第 {'、'.join(str(e.line_no) for e in group)} 行指向）；"
+                f"系所身分要取其大學部代碼，那一列必須存在")
+        elif key_of_code[key] != key:
+            # 被指向的那一列必須指向自己。否則 09→01、01→09 這種環會通過上面
+            # 每一條檢查，卻讓兩個代碼算成兩個系所身分——「這個學院有幾個系」
+            # 就多算了一個，而且完全不會有任何錯誤訊息。
+            problems.conflicts.append(
+                f"dept_key {key} 那一列自己的 dept_key 是 "
+                f"{key_of_code[key]!r}：系所身分必須指向自己，不能再轉一手")
+        colleges = {e.college for e in group if e.college}
+        if len(colleges) > 1:
+            problems.conflicts.append(
+                f"dept_key {key} 底下的列分屬不同學院 {sorted(colleges)}："
+                f"同一個系不可能同時屬於兩個學院")
 
     # --- 同代碼重複 ---
     for code, group in sorted(_group_by_code(mapping).items()):

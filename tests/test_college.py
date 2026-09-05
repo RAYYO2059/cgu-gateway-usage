@@ -34,6 +34,15 @@ def test_遮罩的兩個代碼在學院層級仍可解析():
     assert _lookup("04") == "醫學院"
 
 
+def test_遮罩的兩個代碼在表上記著兩個系名():
+    # docstring 說 03 與 04 底下各有多個系所。系代碼表的來源只寫一個系名，
+    # 照抄就會把「這裡有兩個系」這件事洗掉——而洗掉之後看起來完全正常，
+    # 只是從此沒有人知道 03 不只是醫技系。
+    names = {e.dept_code: e.dept_name for e in ENTRIES}
+    assert names["03"] == "醫技系/醫放系"
+    assert names["04"] == "護理系/學士後護理"
+
+
 def test_遮罩的兩個代碼給了學年也一樣():
     # 全期間適用的列，不該因為有沒有給學年而改變答案。
     for year in (None, "11", 111, "114"):
@@ -100,16 +109,119 @@ def test_未對應與空值不算單系學院():
     assert college.is_single_dept_college("") is False
 
 
+# --- 同系所在不同學制使用不同代碼 -------------------------------------------
+# 三個系的大學部與碩博士班分開編碼。兩個代碼必須落在同一個學院——
+# 若不是，那就不是「同一個系的兩個學制」而是兩個系，dept_key 就配錯了。
+DEGREE_CODE_PAIRS = (
+    ("09", "01", "醫學院"),        # 生醫系 / 生醫所
+    ("26", "31", "工學院"),        # 醫工系 / 醫工所
+    ("28", "61", "智慧運算學院"),  # 人工智慧學系 / 人工智慧系
+)
+
+
+def test_成對的學制代碼指向同一個學院():
+    for undergrad, graduate, expected in DEGREE_CODE_PAIRS:
+        assert _lookup(undergrad) == expected
+        assert _lookup(graduate) == expected
+
+
+def test_成對的學制代碼共用同一個系所身分():
+    keys = {e.dept_code: e.dept_key for e in ENTRIES}
+    for undergrad, graduate, _ in DEGREE_CODE_PAIRS:
+        assert keys[graduate] == keys[undergrad] == undergrad, (
+            f"{graduate} 的 dept_key 應為其大學部代碼 {undergrad}，"
+            f"實際是 {keys[graduate]!r}")
+
+
+def test_沒有成對關係的代碼指向自己():
+    paired = {g for _, g, _ in DEGREE_CODE_PAIRS}
+    for entry in ENTRIES:
+        if entry.dept_code not in paired:
+            assert entry.dept_key == entry.dept_code
+
+
+def test_研究所專屬代碼各自成一個系所身分():
+    # 這五個不是誰的第二個代碼，它們就是自己。錯把它們併到別的 dept_key，
+    # 該學院的系所數就會少一個。
+    keys = {e.dept_code: e.dept_key for e in ENTRIES}
+    for code in ("00", "15", "17", "32", "40"):
+        assert keys[code] == code
+
+
+def test_degrees欄的值都在允許集合裡():
+    for entry in ENTRIES:
+        assert entry.degrees in college.DEGREES_VALUES, (
+            f"第 {entry.line_no} 行 {entry.dept_code} 的 degrees "
+            f"是 {entry.degrees!r}")
+
+
+def test_未查證與有來源的學制值分得開():
+    # 兩者必須是不同的值域。若 (未查證) 混進 DEGREES_SOURCED，
+    # 「這個代碼有人查過」就再也問不出來了——而那正是這一欄存在的理由。
+    assert college.DEGREES_UNVERIFIED not in college.DEGREES_SOURCED
+    assert college.DEGREES_UNVERIFIED in college.DEGREES_VALUES
+    assert college.DEGREES_VALUES == college.DEGREES_SOURCED | {
+        college.DEGREES_UNVERIFIED}
+
+
+# docstring 點名這六個代碼沒有來源可依。清單寫在這裡是為了擋反方向的改動：
+# 把 (未查證) 換成 BMD 不會有任何錯誤訊號，表看起來反而更完整了。
+UNVERIFIED_CODES = ("02", "06", "08", "41", "42", "43")
+
+
+def test_沒有來源的六個代碼標成未查證():
+    degrees = {e.dept_code: e.degrees for e in ENTRIES}
+    for code in UNVERIFIED_CODES:
+        assert degrees[code] == college.DEGREES_UNVERIFIED, (
+            f"{code} 在 docstring 裡列為沒有來源可依，卻標成 "
+            f"{degrees[code]!r}。真的查證過的話，docstring 的那份清單"
+            f"要一起改——否則下一個人會以為這六列從來沒被查過")
+
+
+def test_未查證的代碼不多不少就是那六個():
+    # 只驗「那六個是未查證」擋不住有人再把第七列降級。兩個方向都要鎖。
+    actual = {e.dept_code for e in ENTRIES
+              if e.degrees == college.DEGREES_UNVERIFIED}
+    assert actual == set(UNVERIFIED_CODES), (
+        f"對照表裡未查證的是 {sorted(actual)}，"
+        f"docstring 說的是 {sorted(UNVERIFIED_CODES)}")
+
+
+def test_有來源的代碼不得標成未查證():
+    # 三對學制代碼與五個研究所專屬代碼都有代碼表可依。把它們降級成
+    # (未查證) 不會有任何錯誤訊號，只會讓已經查到的事實安靜地消失。
+    sourced = {u for u, _, _ in DEGREE_CODE_PAIRS}
+    sourced |= {g for _, g, _ in DEGREE_CODE_PAIRS}
+    sourced |= {"00", "15", "17", "32", "40"}
+    degrees = {e.dept_code: e.degrees for e in ENTRIES}
+    for code in sorted(sourced):
+        assert degrees[code] in college.DEGREES_SOURCED, (
+            f"{code} 有來源可依，不該標成 {degrees[code]!r}")
+
+
+def test_成對代碼的學制標註互補():
+    # 大學部那個代碼標 B、碩博士那個標 MD。若有一邊標成 BMD，
+    # 就表示有人把「這個代碼涵蓋全部學制」寫進了一張明明是分開編碼的表。
+    degrees = {e.dept_code: e.degrees for e in ENTRIES}
+    for undergrad, graduate, _ in DEGREE_CODE_PAIRS:
+        assert degrees[undergrad] == "B"
+        assert degrees[graduate] == "MD"
+
+
 # --- 查不到的代碼 -----------------------------------------------------------
-# 01、15、61 出現在 user_registry 但不在獎學金公告的清單裡。
-# 查不到要回 UNMAPPED 而不是 None——None 會被 pandas 當 NA 在 groupby 時丟掉。
+# 先前 01、15、61 對不到，現在都對得到了。這條測試改用一個確定不存在於
+# 對照表的代碼——查不到要回 UNMAPPED 而不是 None，None 會被 pandas 當 NA
+# 在 groupby 時丟掉，那一組資料就這樣無聲消失。
+UNKNOWN_CODE = "99"
+
+
 def test_查不到的代碼回未對應():
-    for code in ("01", "15", "61"):
-        assert _lookup(code) == college.UNMAPPED
+    assert UNKNOWN_CODE not in {e.dept_code for e in ENTRIES}
+    assert _lookup(UNKNOWN_CODE) == college.UNMAPPED
 
 
 def test_未對應不是None():
-    assert _lookup("01") is not None
+    assert _lookup(UNKNOWN_CODE) is not None
     assert college.UNMAPPED == "(未對應)"
 
 
@@ -180,18 +292,29 @@ def test_覆蓋率比對能算出未對應的代碼():
 def test_單系學院常數與對照表一致():
     # SINGLE_DEPT_COLLEGES 是手寫的，對照表改了它不會自動跟上。
     #
+    # 數的是**相異 dept_key 而不是 dept_code**：智慧運算學院有 28 與 61 兩個
+    # 代碼，但那是同一個系的兩個學制。用代碼去數會判定它有兩個系、於是不再是
+    # 單系學院，註記就這樣消失了——而該學院的粒度問題一點都沒有改變。
+    #
     # 注意這條驗的是「常數與對照表一致」，**不是**「對照表與學校現實一致」。
     # 若某學院實際增設了系所、而對照表還沒補上那一列，兩邊仍然一致，這條測試
     # 照樣會過——它擋得住的是有人改了 csv 卻忘了改常數，擋不住 csv 本身過期。
     # 對照表與現實的落差只能靠人去核，沒有測試代得掉。
-    counts: dict[str, set[str]] = {}
-    for entry in ENTRIES:
-        if entry.college:
-            counts.setdefault(entry.college, set()).add(entry.dept_code)
-    actual = {c for c, codes in counts.items() if len(codes) == 1}
+    keys = college.dept_keys_by_college(ENTRIES)
+    actual = {c for c, group in keys.items() if len(group) == 1}
     assert actual == set(college.SINGLE_DEPT_COLLEGES), (
         f"對照表算出來的單系學院是 {sorted(actual)}，"
         f"但 SINGLE_DEPT_COLLEGES 寫的是 {sorted(college.SINGLE_DEPT_COLLEGES)}")
+
+
+def test_智慧運算學院有兩個代碼但只有一個系():
+    # 這條把「代碼數 ≠ 系所數」直接釘住。上一條測試只看最後的集合相不相等，
+    # 兩邊同時算錯時它會過；這條看的是中間的數字。
+    keys = college.dept_keys_by_college(ENTRIES)
+    codes = {e.dept_code for e in ENTRIES if e.college == "智慧運算學院"}
+    assert codes == {"28", "61"}
+    assert keys["智慧運算學院"] == {"28"}
+    assert college.is_single_dept_college("智慧運算學院") is True
 
 
 def _main() -> int:
