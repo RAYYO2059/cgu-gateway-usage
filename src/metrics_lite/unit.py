@@ -46,6 +46,10 @@ def _account_prefix(account: object) -> str | None:
         "服務憑證在第二個分母裡不存在，不是因為被排除，而是因為它不是人"
         "——它沒有可以當作人均分母的東西。兩欄相加沒有意義。"
     ),
+    # caveat 會被渲染進 INDEX.md，所以它是散文——而散文裡的數值會隨每一批
+    # 資料變動。這裡只描述機制、不寫具體數值：寫死的話，下一個改動的人要先
+    # 想到「還有一段散文藏在裝飾器的參數裡」才可能發現它過期了。實際數值
+    # 由表本身提供，那才是唯一會跟著重算的地方。
     caveat=(
         "top1_account_share 是資訊欄位，不是抑制條件。它衡量的是"
         "「該單位內最大的單一遮罩帳號佔多少請求」，而遮罩帳號編碼了"
@@ -53,6 +57,13 @@ def _account_prefix(account: object) -> str | None:
         "已知管理學院有一個帳號底下掛著 17 個 uid、佔該學院約八成請求。"
         "那 17 個人過得了 n>=10 的門檻，所以不是再識別風險，而是代表性問題"
         "——該學院的數字其實是在描述一個班。\n"
+        "**n_users_in_top_account 因此與 top1_account_share 同列，不是"
+        "湊欄位。** 那一欄單獨看無法解讀：同一個佔比，底下是一個人代表"
+        "再識別風險（要遮蔽），是十七個人代表代表性問題（要標註），"
+        "兩者的補救方式相反。解讀它所需的數必須與它同列——放到另一張表，"
+        "讀者會拿著一個沒有意義的百分比自行推論。\n"
+        "n_accounts 同理與 n_users 相鄰：兩者的差距就是遮罩造成的碰撞量，"
+        "也就是有多少人在遮罩之後彼此分不出來。\n"
         "抑制規則處理的是再識別，兩者不該混用同一個機制：把代表性問題塞進"
         "抑制，會讓「這個數字不能公開」與「這個數字不能一般化」變成同一件事，"
         "而它們的補救方式完全相反（前者是遮蔽，後者是標註）。\n"
@@ -63,14 +74,10 @@ def _account_prefix(account: object) -> str | None:
         "那是**非人流量**——不是「不知道是誰」，是「本來就沒有人」。"
         "request_share 欄不會加總到 100%，因為服務憑證那一列在該欄是 NA。\n"
         "\n"
-        "(b) 高 top1_account_share 的單位，人均與總量實質上由單一班級決定。"
-        "管理學院 78.7%、智慧運算學院 77.1%——這兩個學院的人均請求數"
-        "（366.2 與 355.5）約為工學院（203.8）與醫學院（171.3）的兩倍，"
-        "但那個數字幾乎完全由一個班貢獻。準確的說法是「有兩個班在密集使用」，"
-        "不是「該學院使用強度高」。\n"
-        "現有抑制規則對這兩列不會有反應：兩者都過 n>=10，單人佔比分別是"
-        "23.85% 與 29.46%，都在 30% 門檻內。**這個訊息只能由本欄取得**，"
-        "看抑制狀態是看不出來的。\n"
+        "(b) 最大遮罩帳號佔比反映該單位內同系同屆使用者的集中程度。"
+        "此欄不受抑制規則約束——抑制處理的是再識別風險，而集中度屬於"
+        "代表性問題。人均請求數在集中度高的單位主要由該單一群組構成，"
+        "不宜解讀為該單位整體的使用強度。實際數值見表。\n"
         "\n"
         "(c) 教職員 120 人沒有單位資訊，這是**資料層的缺口**——上游帳號格式"
         "本身不編碼單位（identity.classify_account 對教職員一律回 None），"
@@ -97,13 +104,20 @@ def requests_by_unit_lite(tables: dict) -> MetricResult:
     for (unit, unit_type), part in joined.groupby(["unit", "unit_type"],
                                                   dropna=False):
         per_user = part["anonymous_user_id"].value_counts()
-        per_account = part["unit_account"].map(_account_prefix).value_counts()
+        account = part["unit_account"].map(_account_prefix)
+        per_account = account.value_counts()
         n_requests = len(part)
         is_person = unit != SERVICE_UNIT
+        # 最大遮罩帳號底下掛著幾個識別碼。與 top1_account_share 同源：那一欄
+        # 取 per_account 第一名佔多少請求，這一欄取同一個帳號名下有多少個
+        # uid。兩者一起算而不是分開——分開就會有人只更新一邊。
+        top_account = per_account.index[0] if len(per_account) else None
         rows.append({
             "unit": unit,
             "unit_type": unit_type,
             "n_users": int(part["anonymous_user_id"].nunique()),
+            # 與 n_users 相鄰：同一群人的兩種計數，差距即遮罩造成的碰撞。
+            "n_accounts": int(account.nunique()),
             "n_requests": n_requests,
             "request_share": round(n_requests / total, 4) if total else None,
             # 服務憑證不是人 → 這一欄對它沒有意義，填 NA 而不是 0。
@@ -116,6 +130,11 @@ def requests_by_unit_lite(tables: dict) -> MetricResult:
             "top1_account_share": (
                 round(float(per_account.iloc[0]) / n_requests, 4)
                 if n_requests and len(per_account) else pd.NA),
+            # 緊接 top1_account_share：那一欄單獨看無法解讀，見 caveat。
+            "n_users_in_top_account": (
+                int(part.loc[account == top_account,
+                             "anonymous_user_id"].nunique())
+                if top_account is not None else pd.NA),
             # 不論抑制與否都要有值：讓它在不同版本間忽隱忽現，讀者會以為
             # 「這次沒有標」代表「這次不是單系學院」。
             "is_single_dept_college": college.is_single_dept_college(unit),
@@ -194,6 +213,17 @@ def users_by_unit_lite(tables: dict) -> MetricResult:
 
 
 # ---------------------------------------------------------------------------
+# 欄位要寫死而不是靠 pd.DataFrame(rows) 從第一列推導。這是**監測指標**：
+# 它的正常終點就是空表——代碼補齊之後這裡本來就該是零列。而 rows 為空時
+# 推導不出任何欄位，sort_values("n_requests") 會 KeyError，指標整個失敗，
+# 然後渲染器發現 csv 不存在、默默保留文件裡的舊表。
+# 結果是「缺口已補完」這件好事，表現成一份看起來完全正常但已經過期的報表。
+UNMAPPED_COLUMNS = [
+    "dept_code", "n_users", "n_requests", "degree_mix",
+    "entry_year_range", "account_examples", "note",
+]
+
+
 @metric(
     name="unmapped_dept_codes_lite",
     line="lite",
@@ -205,22 +235,8 @@ def users_by_unit_lite(tables: dict) -> MetricResult:
         "這是診斷表，不是分組統計：它回答的是「學院這個維度的覆蓋缺口在哪」，"
         "所以不宣告 group_by——把它當成分組指標會讓覆蓋缺口變成主表的一列，"
         "讀者會誤以為那是一個單位。\n"
-        "實測這六個代碼底下的 24 個人**全部是碩士或博士（M 14、D 10），"
-        "一個大學部（B）都沒有**；相對地，對得到學院的 131 個學生裡有 84 個是 B。"
-        "對照表的來源是大學部獎學金公告，這解釋了為什麼它涵蓋不到這些代碼"
-        "——它們落在研究所專屬的編碼區間。\n"
-        "代碼 00 另外標記：目前看到的三個人全是博士生，而 00 這個值本身比較"
-        "像哨兵值或佔位值而不是真實系所代碼。本專案已經被哨兵值咬過一次"
-        "（空字串 turn_id 被 groupby 併成同一個假群組），所以在查證之前"
-        "不猜它對應哪個系。\n"
-        "\n"
-        "要再取一份研究所系代碼名單的話，優先涵蓋 01 與 61："
-        "兩者合計 15 人（佔未對應**人數** 62.5%）、2,118 筆"
-        "（佔未對應**請求** 56.5%）。01 跨 09–15 學年、9 人，"
-        "是跨度最大也是人數最多的一組。\n"
-        "人數與請求兩個口徑要分開講：若目標是補齊請求覆蓋率，優先序會變成"
-        "61（44.7%）與 31（35.2%），兩者合計 79.9%，而 01 只佔 11.8%。"
-        "補齊哪一個取決於你要修的是「多少人歸不了院」還是「多少流量歸不了院」。"
+        "本表列出無法對應到學院的系所代碼。空表表示全部學生識別碼都已歸屬。"
+        "本表為監測用，後續若出現新的系所代碼會重新有值。"
     ),
 )
 def unmapped_dept_codes_lite(tables: dict) -> MetricResult:
@@ -242,11 +258,13 @@ def unmapped_dept_codes_lite(tables: dict) -> MetricResult:
             "entry_year_range": (f"{years[0]}–{years[-1]}" if len(years) > 1
                                  else (years[0] if years else "")),
             "account_examples": "、".join(accounts[:4]),
-            "note": ("★ 待查證：值本身像哨兵／佔位值，且目前只見博士生"
-                     if code == "00" else ""),
+            # note 欄留白：本表是監測表，備註要寫的是「這個代碼為什麼對不到」，
+            # 而那件事在代碼出現之前無從得知。針對特定代碼預先寫死一句話，
+            # 代碼一旦補進對照表就再也不會執行，只剩一段沒人會發現已經過期的斷言。
+            "note": "",
         })
 
-    data = (pd.DataFrame(rows)
+    data = (pd.DataFrame(rows, columns=UNMAPPED_COLUMNS)
             .sort_values("n_requests", ascending=False)
             .reset_index(drop=True))
     return MetricResult(data=data, n_total=len(students),
