@@ -1,0 +1,5 @@
+﻿pricing_status,n_users,n_requests,request_share,tokens,token_share,cost_usd,備註
+priced,350,77665,0.6444,4170910032,0.9777,2749.32,有價目，金額計入總額
+unpriced_local,31,42067,0.349,94362981,0.0221,0.0,本地模型，本來就不花錢——0 是事實不是缺口
+unpriced_non_token,30,558,0.0046,799849,0.0002,,非 token 計價端點；它們仍會回報 token 數，不擋掉會被文字費率算進去。金額為 NA 不是 0：它按張／按秒計價，本表算不出來
+unpriced_no_table,31,230,0.0019,0,0.0,,★ 真正的缺口：有 token、該計價，但價目表沒有這個 model_family。金額為 NA 不是 0——這一段的錢確實花了，只是我們算不出來
