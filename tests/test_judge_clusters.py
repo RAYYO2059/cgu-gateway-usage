@@ -104,7 +104,13 @@ def test_沒有任何參數可以關掉閘門():
         pass
     finally:
         argparse.ArgumentParser.add_argument = real
-    assert parser_opts <= {"--limit", "--dry-run", "-h", "--help"}, parser_opts
+    assert parser_opts <= {"--limit", "--dry-run", "--prefix-field",
+                           "-h", "--help"}, parser_opts
+    # 而且沒有任何選項的名字聽起來像在繞過閘門。
+    for opt in parser_opts:
+        for word in ("screen", "skip", "force", "all", "unsafe", "flagged",
+                     "no-gate", "bypass"):
+            assert word not in opt.lower(), opt
 
 
 def test_跳過原因逐桶計數():
@@ -351,3 +357,122 @@ def test_一群一次獨立呼叫_沒有共用歷史():
     body = source.split("def judge_one(")[1].split("\ndef ")[0]
     assert 'messages=[{"role": "user", "content": prompt}]' in body
     assert "history" not in body and "append" not in body
+
+
+# --- 前綴欄位選擇（--prefix-field）------------------------------------------
+# raw 是同群成員逐字相同的那一段；normalized 是數字換成佔位、空白收斂之後
+# 才取的共同前綴，因此更長。更長不等於更好——normalized 已經不是任何一筆
+# 真實內容的開頭，被抹掉的數字可能正是線索。哪個好要量測，所以做成參數。
+def test_預設送的是_raw():
+    """預設值不可改。改了就是在沒有量測的情況下換材料。"""
+    assert jc.DEFAULT_PREFIX_FIELD == "raw"
+    assert jc.prefix_column(jc.DEFAULT_PREFIX_FIELD) == "prefix_raw"
+
+
+def test_值域只有兩個而且對到正確欄名():
+    assert set(jc.PREFIX_FIELDS) == {"raw", "normalized"}
+    assert jc.prefix_column("raw") == "prefix_raw"
+    assert jc.prefix_column("normalized") == "prefix_normalized"
+
+
+@pytest.mark.parametrize("bad", ["", "RAW", "prefix_raw", "norm", "both", None])
+def test_未知的前綴欄位被擋下(bad):
+    with pytest.raises((ValueError, TypeError)):
+        jc.prefix_column(bad)
+
+
+def test_換前綴欄位會換指紋():
+    """prefix_field 是模板的一部分：送 raw 與送 normalized 是兩份不同的材料。
+
+    不換指紋的話，兩批不可比的結果會混在同一個 judge_output.csv 裡，
+    而且事後分不出來哪一列是哪一批。
+    """
+    axes = jc.render_axes(FIELDS, {
+        k: {v: "" for v in vals} for k, vals in FIELDS.items()})
+    a = jc.template_fingerprint(axes, "raw")
+    b = jc.template_fingerprint(axes, "normalized")
+    assert a != b
+    assert len(a) == len(b) == 64
+
+
+def test_指紋的預設參數就是預設欄位():
+    axes = jc.render_axes(FIELDS, {
+        k: {v: "" for v in vals} for k, vals in FIELDS.items()})
+    assert jc.template_fingerprint(axes) == \
+        jc.template_fingerprint(axes, jc.DEFAULT_PREFIX_FIELD)
+
+
+def test_指紋對未知欄位會_raise_而不是靜默算一個():
+    axes = jc.render_axes(FIELDS, {
+        k: {v: "" for v in vals} for k, vals in FIELDS.items()})
+    with pytest.raises(ValueError):
+        jc.template_fingerprint(axes, "both")
+
+
+def test_CLI_接受兩個值且預設為_raw():
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--prefix-field", choices=sorted(jc.PREFIX_FIELDS),
+                        default=jc.DEFAULT_PREFIX_FIELD)
+    assert parser.parse_args([]).prefix_field == "raw"
+    assert parser.parse_args(["--prefix-field", "normalized"]).prefix_field \
+        == "normalized"
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--prefix-field", "both"])
+
+
+def test_送出的欄位由參數決定_只有一處讀_parquet():
+    """程式裡只能有一個地方決定送哪一欄，否則參數會漏掉其中一處。"""
+    source = JUDGE.read_text(encoding="utf-8")
+    # 取 prefix 的那一行必須用變數，不得寫死欄名
+    assert 'prefix = str(prefixes.loc[gid, column])' in source
+    assert 'prefixes.loc[gid, "prefix_raw"]' not in source
+    assert 'prefixes.loc[gid, "prefix_normalized"]' not in source
+
+
+def test_外洩防線對兩欄都比對():
+    """送哪一欄都要對兩欄比對——raw 與 normalized 只差數字與空白，
+    抄了其中一段往往兩邊都命中，而漏判的代價是明文進 CSV。"""
+    source = JUDGE.read_text(encoding="utf-8")
+    assert "for col in PREFIX_FIELDS.values()" in source
+
+
+# --- 盲性 -------------------------------------------------------------------
+# 人工審閱不得在看過 LLM 判定之後進行。兩支程式互不讀取，是為了讓「沒有
+# 互看」由檔案依賴關係保證，而不是靠人記得。規則寫在
+# ref/annotation_protocol.md 第二節〈盲性〉。
+def test_判定器不讀人工審閱結果():
+    source = JUDGE.read_text(encoding="utf-8")
+    code = source.split("from __future__ import annotations", 1)[1]
+    assert "cluster_review" not in code, \
+        "判定器碰到了人工審閱結果——那會讓一致率變成『模型有多會抄』"
+
+
+def test_判定器只讀這四個檔():
+    source = JUDGE.read_text(encoding="utf-8")
+    paths = [l.split("=")[0].strip() for l in source.splitlines()
+             if "HERE /" in l and "=" in l]
+    assert set(paths) == {"PREFIXES", "CLUSTERS", "SCREEN_CSV",
+                          "OUTPUT_CSV", "CARRIER"}
+
+
+def test_從載具只取定義不取判定():
+    """_load_carrier 是為了三軸的值域，不是為了讀人的答案。"""
+    source = JUDGE.read_text(encoding="utf-8")
+    body = source.split("def _load_carrier(")[1].split("\nPROMPT_TEMPLATE")[0]
+    assert "FIELDS" not in body or "review_clusters" in body
+    assert "cluster_review" not in body
+    assert "REVIEW_CSV" not in body
+
+
+def test_main_的待判清單只取通過閘門的群():
+    """閘門的最後一哩：`clean_group_ids()` 算得對，不代表 main 有用它。
+
+    這一行原本沒有測試覆蓋——突變測試裡那條「沒篩檢的群當成通過」一直
+    回報「突變無效」，追下去才發現是它沒被驗到，不是它不會壞。
+    """
+    source = JUDGE.read_text(encoding="utf-8")
+    assert "todo = [g for g in all_ids if g in clean and g not in done]" in source, \
+        "main 組待判清單的方式變了——確認它仍然只取通過閘門的群"

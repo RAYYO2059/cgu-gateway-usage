@@ -482,3 +482,26 @@ def test_screen_旗標存在且預設為關():
               ).read_text(encoding="utf-8")
     assert '"--screen"' in source
     assert "return run_screen() if args.screen else run_review()" in source
+
+
+# --- 盲性 -------------------------------------------------------------------
+def test_載具不讀也不顯示_LLM_判定結果():
+    """載具讀 clusters.parquet 而非 judge_output.csv，這是設計不是巧合。
+
+    一旦人看過 LLM 的答案，該群的人工判定就不再是獨立參照，一致率也就
+    失去意義——它會變成「人有多容易被說服」的量測，而那個數字看起來與
+    真正的一致率完全一樣，事後也分不出來。
+    規則寫在 ref/annotation_protocol.md 第二節〈盲性〉。
+    """
+    source = CARRIER.read_text(encoding="utf-8")
+    code = source.split("from __future__ import annotations", 1)[1]
+    for token in ("judge_output", "judge_clusters", "confidence"):
+        assert token not in code, f"載具碰到了 LLM 判定相關的 {token}"
+
+
+def test_載具只讀這五個檔():
+    source = CARRIER.read_text(encoding="utf-8")
+    paths = [l.split("=")[0].strip() for l in source.splitlines()
+             if "HERE /" in l and "=" in l]
+    assert set(paths) == {"CLUSTERS", "MEMBERS", "PREFIXES",
+                          "REVIEW_CSV", "SCREEN_CSV"}
