@@ -796,3 +796,133 @@ def test_重試耗盡的訊息不夾帶提示詞(monkeypatch, tmp_path):
     with pytest.raises(ValueError) as exc:
         jc.call_with_backoff("SECRET-PREFIX-XYZ", ["-p"], tmp_path)
     assert "SECRET-PREFIX" not in str(exc.value)
+
+
+# --- 探針問法與指紋 ---------------------------------------------------------
+# 探針問法變了等於檢查強度變了。放寬問法會讓判定照樣通過、指紋不變、
+# 輸出檔看起來一模一樣——而那正是「這批結果是在什麼條件下產生的」這個
+# 問題最需要答案的地方。
+def test_探針問四樣具體的東西_不問上下文總量():
+    """第一版問「除了本則訊息之外還有沒有任何其他內容」，而我們自己的
+    --system-prompt 按定義就是「其他內容」，於是必然回 YES、整批必然被擋。
+    太嚴是安全的方向，但一個必然觸發的檢查最後一定會被關掉。"""
+    p = jc.BLIND_PROBE_PROMPT
+    for item in ("專案說明文件", "CLAUDE.md", "記憶", "先前的對話", "檔案系統"):
+        assert item in p, item
+    assert "除了本則訊息之外" not in p
+    assert "任何其他內容" not in p
+
+
+def test_改探針一個字指紋就變():
+    axes = _axes()
+    flags = jc.cli_flags(jc.build_json_schema(FIELDS), 4.5)
+    schema = jc.build_json_schema(FIELDS)
+    before = jc.template_fingerprint(axes, flags=flags, schema=schema)
+    original = jc.BLIND_PROBE_PROMPT
+    try:
+        jc.BLIND_PROBE_PROMPT = original + "。"      # 多一個句號
+        after = jc.template_fingerprint(axes, flags=flags, schema=schema)
+    finally:
+        jc.BLIND_PROBE_PROMPT = original
+    assert before != after, "探針問法改了但指紋沒變"
+
+
+def test_改探針值域指紋也會變():
+    """把 YES/NO 放寬成 YES/NO/MAYBE 就是放寬了檢查強度。"""
+    axes = _axes()
+    flags = jc.cli_flags(jc.build_json_schema(FIELDS), 4.5)
+    schema = jc.build_json_schema(FIELDS)
+    before = jc.template_fingerprint(axes, flags=flags, schema=schema)
+    original = jc.BLIND_PROBE_SCHEMA
+    try:
+        jc.BLIND_PROBE_SCHEMA = {**original, "properties": {
+            **original["properties"],
+            "answer": {"type": "string", "enum": ["YES", "NO", "MAYBE"]}}}
+        after = jc.template_fingerprint(axes, flags=flags, schema=schema)
+    finally:
+        jc.BLIND_PROBE_SCHEMA = original
+    assert before != after
+
+
+def test_探針回_NO_才繼續(monkeypatch, tmp_path):
+    fake = _FakeRun([_envelope('{"answer": "NO", "kind": "none"}')])
+    monkeypatch.setattr(jc.subprocess, "run", fake)
+    got = jc.blindness_check(jc.cli_flags(jc.build_json_schema(FIELDS), 1.0),
+                             tmp_path)
+    assert got["answer"] == "NO"
+
+
+@pytest.mark.parametrize("kind", ["專案說明文件", "記憶", "先前的對話", "檔案系統工具"])
+def test_探針回_YES_仍然擋得住(monkeypatch, tmp_path, kind):
+    """放寬問法之後，四項裡任何一項出現都還是要擋。"""
+    fake = _FakeRun([_envelope(
+        _json.dumps({"answer": "YES", "kind": kind}, ensure_ascii=False))])
+    monkeypatch.setattr(jc.subprocess, "run", fake)
+    with pytest.raises(SystemExit):
+        jc.blindness_check(jc.cli_flags(jc.build_json_schema(FIELDS), 1.0),
+                           tmp_path)
+
+
+# --- 啟動檢查要走實際執行的那條路徑 -----------------------------------------
+def test_resolve_claude_走完整路徑而不是裸名字():
+    """Windows 上 npm 裝的是 claude.CMD，另有一個沒有副檔名的 shim。
+    subprocess.run 不帶 shell 走 CreateProcess，它不查 PATHEXT，於是撿到
+    那個 shim 卻執行不了。shutil.which 會查 PATHEXT。"""
+    source = JUDGE.read_text(encoding="utf-8")
+    code = source.split("from __future__ import annotations", 1)[1]
+    assert "[resolve_claude(), *flags]" in code
+    assert "[CLAUDE_BIN, *flags]" not in code
+
+
+def test_resolve_claude_用_which(monkeypatch):
+    monkeypatch.setattr(jc, "_CLAUDE_EXE", None)
+    monkeypatch.setattr(jc.shutil, "which", lambda name: r"C:\x\claude.CMD")
+    assert jc.resolve_claude() == r"C:\x\claude.CMD"
+
+
+def test_resolve_claude_找不到時退回裸名字(monkeypatch):
+    """找不到就退回裸名字讓 subprocess 自己報錯，不要靜默用一個空字串。"""
+    monkeypatch.setattr(jc, "_CLAUDE_EXE", None)
+    monkeypatch.setattr(jc.shutil, "which", lambda name: None)
+    assert jc.resolve_claude() == jc.CLAUDE_BIN
+
+
+def test_呼叫用的是解析後的路徑(monkeypatch, tmp_path):
+    monkeypatch.setattr(jc, "_CLAUDE_EXE", None)
+    monkeypatch.setattr(jc.shutil, "which", lambda name: r"C:\x\claude.CMD")
+    fake = _FakeRun([_envelope("{}")])
+    monkeypatch.setattr(jc.subprocess, "run", fake)
+    jc.run_claude("x", ["-p"], tmp_path)
+    assert fake.calls[0]["argv"][0] == r"C:\x\claude.CMD"
+
+
+# --- except 要涵蓋 SystemExit 與 Exception 兩者 -----------------------------
+def test_週期檢查的_except_涵蓋兩種例外():
+    """SystemExit 不是 Exception 的子類。只寫 except SystemExit 的話，
+    其餘例外全部漏過去帶著 traceback 跑，而那條路徑的區域變數含提示詞
+    與前綴。見 ENGINEERING_NOTES〈明文邊界要涵蓋例外訊息〉。"""
+    source = JUDGE.read_text(encoding="utf-8")
+    code = source.split("from __future__ import annotations", 1)[1]
+    assert "except (SystemExit, Exception) as exc:" in code
+    # 不得有只擋 SystemExit 的裸子句
+    for line in code.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("except SystemExit"):
+            assert stripped == "except SystemExit:", stripped   # 只允許 re-raise
+
+
+def test_啟動檢查的例外不會_raise_到頂層():
+    source = JUDGE.read_text(encoding="utf-8")
+    block = source.split("盲化自我檢查（啟動）", 1)[1].split('print("NO ✓")', 1)[0]
+    assert "except Exception as exc:" in block
+    assert "raise SystemExit(" in block
+    # 只印型別名，不印例外訊息
+    assert "{type(exc).__name__}" in block
+    assert "{exc}" not in block
+
+
+def test_週期檢查失敗時只印型別名():
+    source = JUDGE.read_text(encoding="utf-8")
+    block = source.split("盲化自我檢查（第 {n} 群之前）", 1)[1].split("break", 1)[0]
+    assert "isinstance(exc, SystemExit)" in block
+    assert "type(exc).__name__" in block

@@ -369,6 +369,36 @@ import 進來了。於是 INDEX.md 與 README.md 的「已註冊指標」從 19 
   `git ls-files --error-unmatch <path>`；要問「會不會被 ignore」就用
   `git check-ignore -q`。`-v` 只適合拿來**看是哪一條規則命中**，不適合
   當是非題的答案。
+
+## 啟動檢查要用實際執行的那條路徑
+
+- **現象**：一支程式在啟動時確認外部指令存在，用的是
+  `shutil.which("claude")`——**通過了**。第一次真的呼叫時
+  `subprocess.run(["claude", ...])` 回
+  `FileNotFoundError: [WinError 2] 系統找不到指定的檔案`。
+- **成因**：兩者的判準不同。
+
+      shutil.which()   查 PATH **並且查 PATHEXT** → 找到 claude.CMD
+      CreateProcess    查 PATH，**不查 PATHEXT**   → 找到沒有副檔名的
+                                                    bash shim，執行不了
+
+  npm 在 Windows 上同時裝了 `claude`（bash shim，無副檔名）、`claude.cmd`
+  與 `claude.ps1`。`which` 看到的是能跑的那個，`subprocess` 撿到的是不能
+  跑的那個。
+- **為什麼特別糟**：**啟動檢查存在的唯一理由，就是不要跑到一半才失敗**——
+  「半途失敗的代價不只是重跑：已完成的部分已經花了錢，而失敗點在哪要看
+  輸出檔才知道。」這個檢查用一個**大概等價**的查詢代替了真實路徑，
+  於是它保證的那件事正好是它沒有驗到的那件事。
+- **這是〈驗證指令本身要驗過〉的同族**：`which` 回報的是「PATH 裡找得到
+  嗎」，不是「這樣呼叫跑得起來嗎」。同一個字被當成兩個意思用。
+- **規則**：**啟動檢查要走真實路徑跑一次最小的實例**，不要用一個「大概
+  等價」的查詢代替。這裡的正確寫法是把 `which` 的**回傳值**交給
+  `subprocess` 用（而不是重新傳裸名字），並且在啟動時就用它跑一次
+  `--version` 之類的最小呼叫。
+- **推廣**：`os.path.exists` 不等於「開得起來」（權限、鎖定、symlink 斷掉）；
+  `import x` 成功不等於「x 的那個功能可用」（選配相依）；連得上資料庫
+  不等於「這個查詢跑得起來」（權限在表層級）。**存在性檢查與可用性檢查
+  是兩件事，而前者比較好寫，所以它常常被寫成後者。**
 - **推廣**：凡是「回報狀態」的指令都要問一次它回報的是哪一種狀態。同型的例子：
   `grep -q` 找不到時回 1（不是錯誤），`diff` 相同時回 0（不是失敗），
   `test -e` 對 broken symlink 回假。**把 exit code 當語意用之前，先讀它的定義。**
@@ -553,3 +583,26 @@ import 進來了。於是 INDEX.md 與 README.md 的「已註冊指標」從 19 
 代價是除錯變難——只有型別名沒有訊息。這是刻意的取捨：**明文一旦落地就收不
 回來**，而除錯資訊可以在受控環境重跑一次拿到。若真的需要細節，讓失敗的
 識別碼（雜湊、路徑）進日誌，內容不進。
+
+**一則實例，出現在寫這條規則的那支程式裡。** 該程式的週期性檢查寫的是
+
+    try:
+        probe = blindness_check(flags, workdir)
+    except SystemExit as exc:      # ← 只擋 SystemExit
+        ...停止並記錄...
+
+而 `SystemExit` **不是 `Exception` 的子類**（它直接繼承 `BaseException`）。
+所以這個子句只擋自己主動拋的那一種，其餘例外——`FileNotFoundError`、
+`JSONDecodeError`、`TimeoutExpired`——**全部漏過去帶著 traceback 跑到頂層**，
+而那條路徑上的區域變數含提示詞與前綴。
+
+同一支程式的啟動檢查更直接：完全沒有 `try`。實際跑的時候就炸出一個
+完整 traceback（那次剛好只夾帶檔案路徑，但那是運氣不是設計）。
+
+正確寫法：`except (SystemExit, Exception) as exc:`，並在子句裡分開處理
+——自己拋的 `SystemExit` 訊息是自己寫的可以印，其餘只印 `type(exc).__name__`。
+
+**推論：檢視 `except` 子句時要問的不是「這個型別對不對」，是「哪些型別會
+從這裡漏出去」。** 前者只看得到寫下來的那一行，後者才看得到沒寫的那些。
+Python 裡最常漏的三個是 `SystemExit`、`KeyboardInterrupt`、
+`GeneratorExit`——它們都不是 `Exception`。
