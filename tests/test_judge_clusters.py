@@ -42,6 +42,15 @@ FIELDS = {
 }
 
 
+ROW = dict(
+    group_id="A001", frame_owner="tool", disposition="remove",
+    axis_level="all_three", reason="結構描述", confidence="high",
+    model="claude-opus-5", prompt_sha256="a" * 64,
+    judged_at="2026-09-06T20:00:00",
+    total_cost_usd=0.0066, input_tokens=347, output_tokens=151,
+    thinking_tokens=0, duration_ms=1660)
+
+
 def _screen(rows):
     return pd.DataFrame(rows, columns=["group_id", "personal_data"])
 
@@ -242,13 +251,9 @@ def test_明文欄名硬擋(bad):
         jc.check_output_columns(list(jc.OUTPUT_COLUMNS) + [bad])
 
 
-def test_寫出的_csv_只有九欄而且沒有前綴(tmp_path):
+def test_寫出的_csv_欄位固定而且沒有前綴(tmp_path):
     path = tmp_path / "judge_output.csv"
-    jc.append_output(path, dict(
-        group_id="A001", frame_owner="tool", disposition="remove",
-        axis_level="all_three", reason="結構描述", confidence="high",
-        model="claude-opus-5", prompt_sha256="a" * 64,
-        judged_at="2026-09-06T20:00:00"))
+    jc.append_output(path, dict(ROW))
     with path.open(encoding="utf-8-sig", newline="") as fh:
         rows = list(csv.DictReader(fh))
     assert list(rows[0].keys()) == list(jc.OUTPUT_COLUMNS)
@@ -258,10 +263,7 @@ def test_寫出的_csv_只有九欄而且沒有前綴(tmp_path):
 
 def test_多塞的欄位不會落地(tmp_path):
     path = tmp_path / "o.csv"
-    jc.append_output(path, dict(
-        group_id="A001", frame_owner="tool", disposition="keep",
-        axis_level="none", reason="r", confidence="low", model="m",
-        prompt_sha256="s", judged_at="t", 額外="x"))
+    jc.append_output(path, {**ROW, "額外": "x"})
     with path.open(encoding="utf-8-sig", newline="") as fh:
         assert list(csv.DictReader(fh).fieldnames) == list(jc.OUTPUT_COLUMNS)
 
@@ -279,10 +281,7 @@ def test_沒有輸出檔時全部待判(tmp_path):
 def test_續跑跳過已判的(tmp_path):
     path = tmp_path / "o.csv"
     for gid in ("A001", "A003"):
-        jc.append_output(path, dict(
-            group_id=gid, frame_owner="tool", disposition="keep",
-            axis_level="none", reason="r", confidence="low", model="m",
-            prompt_sha256="s", judged_at="t"))
+        jc.append_output(path, {**ROW, "group_id": gid})
     done = jc.load_done(path)
     assert done == {"A001", "A003"}
     clean = {"A001", "A002", "A003", "A004"}
@@ -298,22 +297,28 @@ def test_輸出檔壞掉時當作沒判過而不是炸掉(tmp_path):
 
 
 # --- 金鑰 -------------------------------------------------------------------
-def test_沒有金鑰時啟動就報錯(monkeypatch):
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+def test_找不到_claude_時啟動就報錯(monkeypatch):
+    monkeypatch.setattr(jc.shutil, "which", lambda name: None)
     with pytest.raises(SystemExit) as exc:
-        jc.require_credentials()
-    assert "ANTHROPIC_API_KEY" in str(exc.value)
+        jc.require_claude_cli()
+    assert "claude" in str(exc.value)
 
 
-def test_有金鑰時通過(monkeypatch):
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-not-a-real-key")
-    jc.require_credentials()
+def test_找得到_claude_時通過(monkeypatch):
+    monkeypatch.setattr(jc.shutil, "which", lambda name: "/usr/bin/claude")
+    assert jc.require_claude_cli() == "/usr/bin/claude"
 
 
-def test_金鑰不出現在原始碼裡():
+def test_不再需要_API_金鑰():
+    """走 headless 就是為了不另外計費。原始碼裡不該再有金鑰的路徑。"""
     source = JUDGE.read_text(encoding="utf-8")
     assert "sk-ant" not in source
+    code = source.split("from __future__ import annotations", 1)[1]
+    # 說明文字裡提到「不需要 ANTHROPIC_API_KEY」是可以的；**讀它**不行。
+    assert "os.environ" not in code
+    assert "getenv" not in code
+    assert "import anthropic" not in code
+    assert "import os" not in code.split("import pandas")[0]
 
 
 # --- 提示詞指紋 -------------------------------------------------------------
@@ -349,14 +354,15 @@ def test_模組層不_import_anthropic_也不讀檔():
 
 
 def test_一群一次獨立呼叫_沒有共用歷史():
-    """judge_one 的 messages 只有這一次的 prompt，沒有累積的歷史。
+    """每次都是全新的 claude -p，沒有 --resume / --continue / session 累積。
 
     同一個上下文裡連判 226 次會漂移，而漂移沒有訊號。
     """
     source = JUDGE.read_text(encoding="utf-8")
-    body = source.split("def judge_one(")[1].split("\ndef ")[0]
-    assert 'messages=[{"role": "user", "content": prompt}]' in body
-    assert "history" not in body and "append" not in body
+    code = source.split("from __future__ import annotations", 1)[1]
+    for bad in ("--resume", "--continue", "--fork-session", "session_id="):
+        assert bad not in code, bad
+    assert "--no-session-persistence" in code
 
 
 # --- 前綴欄位選擇（--prefix-field）------------------------------------------
@@ -476,3 +482,317 @@ def test_main_的待判清單只取通過閘門的群():
     source = JUDGE.read_text(encoding="utf-8")
     assert "todo = [g for g in all_ids if g in clean and g not in done]" in source, \
         "main 組待判清單的方式變了——確認它仍然只取通過閘門的群"
+
+
+# ===========================================================================
+# Claude Code headless 呼叫層
+# ===========================================================================
+# subprocess 全部 mock，**不真的呼叫 claude**。fixture 字串都是現造的。
+import json as _json
+import types as _types
+
+
+def _envelope(result, **over):
+    env = {
+        "type": "result", "subtype": "success", "is_error": False,
+        "num_turns": 1, "result": result, "total_cost_usd": 0.0066,
+        "duration_ms": 1660,
+        "usage": {"input_tokens": 347, "output_tokens": 151,
+                  "output_tokens_details": {"thinking_tokens": 0}},
+    }
+    env.update(over)
+    return _json.dumps(env, ensure_ascii=False)
+
+
+class _FakeRun:
+    """記錄 subprocess.run 收到什麼，回傳預先安排好的信封。"""
+
+    def __init__(self, outputs, returncode=0):
+        self.outputs = list(outputs)
+        self.returncode = returncode
+        self.calls = []
+
+    def __call__(self, argv, **kw):
+        self.calls.append({"argv": list(argv), **kw})
+        out = self.outputs.pop(0) if self.outputs else ""
+        return _types.SimpleNamespace(returncode=self.returncode,
+                                      stdout=out, stderr="")
+
+
+def _axes():
+    return jc.render_axes(FIELDS, {k: {v: "" for v in vals}
+                                   for k, vals in FIELDS.items()})
+
+
+# --- 提示詞走 stdin，不進命令列 ---------------------------------------------
+def test_提示詞走_stdin_不進命令列(monkeypatch, tmp_path):
+    """前綴含換行與引號，塞進命令列參數會被參數解析改掉，而且不會報錯。"""
+    fake = _FakeRun([_envelope("{}")])
+    monkeypatch.setattr(jc.subprocess, "run", fake)
+    prompt = 'FRAME "含引號"\n含換行\n'
+    jc.run_claude(prompt, ["-p", "--output-format", "json"], tmp_path)
+    call = fake.calls[0]
+    assert call["input"] == prompt
+    assert "含換行" not in " ".join(call["argv"])
+
+
+def test_呼叫在指定的乾淨目錄執行(monkeypatch, tmp_path):
+    fake = _FakeRun([_envelope("{}")])
+    monkeypatch.setattr(jc.subprocess, "run", fake)
+    jc.run_claude("x", ["-p"], tmp_path)
+    assert fake.calls[0]["cwd"] == str(tmp_path)
+
+
+def test_非零離開會_raise_而且訊息不夾帶輸出(monkeypatch, tmp_path):
+    fake = _FakeRun([_envelope("{}")], returncode=1)
+    monkeypatch.setattr(jc.subprocess, "run", fake)
+    with pytest.raises(ValueError) as exc:
+        jc.run_claude("SECRET-PREFIX-DO-NOT-LEAK", ["-p"], tmp_path)
+    assert "SECRET-PREFIX" not in str(exc.value)
+
+
+# --- 信封解析 ---------------------------------------------------------------
+def test_信封取得需要的欄位():
+    got = jc.parse_envelope(_envelope('{"a": 1}'))
+    assert got["result"] == '{"a": 1}'
+    assert got["total_cost_usd"] == 0.0066
+    assert got["input_tokens"] == 347
+    assert got["output_tokens"] == 151
+    assert got["thinking_tokens"] == 0
+    assert got["duration_ms"] == 1660
+
+
+@pytest.mark.parametrize("bad", ["", "   ", "not json", "[1,2]"])
+def test_壞掉的信封會_raise(bad):
+    with pytest.raises(ValueError):
+        jc.parse_envelope(bad)
+
+
+def test_is_error_為真會_raise():
+    with pytest.raises(ValueError):
+        jc.parse_envelope(_envelope("{}", is_error=True))
+
+
+def test_subtype_不是_success_會_raise():
+    with pytest.raises(ValueError):
+        jc.parse_envelope(_envelope("{}", subtype="error_max_turns"))
+
+
+def test_信封解析失敗的訊息不夾帶原文():
+    secret = "SENSITIVE-ENVELOPE-PAYLOAD-0123456789"
+    try:
+        jc.parse_envelope("{" + secret)
+    except ValueError as exc:
+        assert secret not in str(exc)
+    else:
+        pytest.fail("應該要 raise")
+
+
+def test_成本欄位缺失時回_None_而不是炸掉():
+    env = _json.dumps({"type": "result", "subtype": "success",
+                       "is_error": False, "result": "{}"})
+    got = jc.parse_envelope(env)
+    assert got["total_cost_usd"] is None
+    assert got["input_tokens"] is None
+    assert got["thinking_tokens"] is None
+
+
+def test_成本缺值不算可疑():
+    """成本缺值是另一件事，由欄位缺失的處理負責，不該誤報成盲化失效。"""
+    assert jc.cost_is_suspicious(None) is False
+    assert jc.cost_is_suspicious("") is False
+
+
+# --- 盲化自我檢查 -----------------------------------------------------------
+def test_盲化檢查回_NO_通過(monkeypatch, tmp_path):
+    fake = _FakeRun([_envelope('{"answer": "NO"}')])
+    monkeypatch.setattr(jc.subprocess, "run", fake)
+    got = jc.blindness_check(jc.cli_flags(jc.build_json_schema(FIELDS), 1.0),
+                             tmp_path)
+    assert got["answer"] == "NO"
+
+
+def test_盲化檢查回_YES_就_SystemExit(monkeypatch, tmp_path):
+    """判定器讀得到專案就等於預標籤污染，而那不會在輸出上留下痕跡。"""
+    fake = _FakeRun([_envelope('{"answer": "YES", "kind": "專案說明"}')])
+    monkeypatch.setattr(jc.subprocess, "run", fake)
+    with pytest.raises(SystemExit) as exc:
+        jc.blindness_check(jc.cli_flags(jc.build_json_schema(FIELDS), 1.0),
+                           tmp_path)
+    assert "盲化" in str(exc.value)
+
+
+@pytest.mark.parametrize("bad", ["不是 json", '{"answer": "MAYBE"}', "{}"])
+def test_盲化檢查無法解析就_SystemExit(monkeypatch, tmp_path, bad):
+    fake = _FakeRun([_envelope(bad)])
+    monkeypatch.setattr(jc.subprocess, "run", fake)
+    with pytest.raises(SystemExit):
+        jc.blindness_check(jc.cli_flags(jc.build_json_schema(FIELDS), 1.0),
+                           tmp_path)
+
+
+def test_盲化檢查用自己的_schema(monkeypatch, tmp_path):
+    """探針要的是 YES/NO，不是三軸——用判定的 schema 問會逼它答錯格式。"""
+    fake = _FakeRun([_envelope('{"answer": "NO"}')])
+    monkeypatch.setattr(jc.subprocess, "run", fake)
+    jc.blindness_check(jc.cli_flags(jc.build_json_schema(FIELDS), 1.0), tmp_path)
+    argv = fake.calls[0]["argv"]
+    schema = _json.loads(argv[argv.index("--json-schema") + 1])
+    assert schema["properties"]["answer"]["enum"] == ["YES", "NO"]
+    assert "frame_owner" not in schema["properties"]
+
+
+def test_盲化檢查沒有任何開關():
+    """硬性的。CLI 不得有跳過它的參數，程式裡也不得有旁路。"""
+    source = JUDGE.read_text(encoding="utf-8")
+    code = source.split("from __future__ import annotations", 1)[1]
+    for bad in ("--skip-blind", "--no-blind", "skip_blindness", "--unsafe"):
+        assert bad not in code, bad
+    assert "blindness_check(" in code
+
+
+def test_每_25_群重跑一次():
+    assert jc.BLIND_CHECK_EVERY == 25
+    assert jc.should_recheck(1) is False        # 啟動時已經跑過
+    assert jc.should_recheck(26) is True
+    assert jc.should_recheck(51) is True
+    for n in (2, 25, 27, 50, 52):
+        assert jc.should_recheck(n) is False
+
+
+# --- 成本門檻 ---------------------------------------------------------------
+def test_成本超過門檻算可疑():
+    assert jc.cost_is_suspicious(0.0686) is True    # 實測的預設設定成本
+    assert jc.cost_is_suspicious(0.0066) is False   # 實測的盲化設定成本
+    assert jc.cost_is_suspicious(jc.COST_WARN_USD) is False
+
+
+def test_成本門檻只警示不中斷():
+    """前綴長度差異本來就會讓成本浮動，門檻是事後看分布用的。"""
+    source = JUDGE.read_text(encoding="utf-8")
+    block = source.split("cost_is_suspicious(env", 1)[1].split("\n\n", 1)[0]
+    assert "continue" not in block and "break" not in block
+    assert "raise" not in block
+
+
+# --- json-schema ------------------------------------------------------------
+def test_schema_的_enum_與_FIELDS_逐項相同():
+    """手寫第二份會跟 FIELDS 漂，而漂了之後 schema 仍然合法。"""
+    carrier = jc._load_carrier()
+    schema = jc.build_json_schema(carrier.FIELDS)
+    for axis, values in carrier.FIELDS.items():
+        assert schema["properties"][axis]["enum"] == list(values), axis
+    assert schema["properties"]["confidence"]["enum"] == list(jc.CONFIDENCE_VALUES)
+    assert set(schema["required"]) == set(carrier.FIELDS) | {"reason", "confidence"}
+    assert schema["additionalProperties"] is False
+
+
+def test_schema_跟著_FIELDS_變():
+    a = jc.build_json_schema(FIELDS)
+    b = jc.build_json_schema({**FIELDS, "frame_owner": ("tool", "user")})
+    assert a != b
+
+
+def test_reason_在_schema_裡沒有值域限制():
+    """schema 管不了「不得引用前綴」，那條由 reason_leaks_prefix 擋。"""
+    schema = jc.build_json_schema(FIELDS)
+    assert "enum" not in schema["properties"]["reason"]
+
+
+# --- 旗標與指紋 -------------------------------------------------------------
+def test_旗標集合含所有盲化旗標():
+    flags = jc.cli_flags(jc.build_json_schema(FIELDS), 4.5)
+    for required in ("--safe-mode", "--system-prompt", "--tools",
+                     "--strict-mcp-config", "--disable-slash-commands",
+                     "--permission-prompts", "--no-session-persistence",
+                     "--model", "--effort", "--json-schema",
+                     "--max-budget-usd", "--output-format"):
+        assert required in flags, required
+    assert flags[flags.index("--tools") + 1] == ""          # 停用所有工具
+    assert flags[flags.index("--model") + 1] == jc.MODEL
+    assert flags[flags.index("--effort") + 1] == jc.EFFORT
+    assert "--bare" not in flags                            # 它會強制 API 金鑰
+
+
+@pytest.mark.parametrize("flag,value", [
+    ("--safe-mode", None),
+    ("--tools", "default"),
+    ("--model", "claude-sonnet-5"),
+    ("--effort", "high"),
+    ("--system-prompt", "別的系統提示"),
+])
+def test_改任一旗標指紋會變(flag, value):
+    """--safe-mode 拿掉、--tools 換成 default，都會讓判定條件變成另一回事，
+    而那不會出現在提示詞模板裡。"""
+    schema = jc.build_json_schema(FIELDS)
+    base = jc.cli_flags(schema, 4.5)
+    a = jc.template_fingerprint(_axes(), flags=base, schema=schema)
+    changed = list(base)
+    i = changed.index(flag)
+    if value is None:
+        del changed[i]
+    else:
+        changed[i + 1] = value
+    b = jc.template_fingerprint(_axes(), flags=changed, schema=schema)
+    assert a != b, f"{flag} 改了但指紋沒變"
+
+
+def test_改_schema_指紋會變():
+    flags = jc.cli_flags(jc.build_json_schema(FIELDS), 4.5)
+    a = jc.template_fingerprint(_axes(), flags=flags,
+                                schema=jc.build_json_schema(FIELDS))
+    b = jc.template_fingerprint(_axes(), flags=flags, schema={"type": "object"})
+    assert a != b
+
+
+def test_改執行路徑指紋會變():
+    assert (jc.template_fingerprint(_axes(), runtime="claude_code")
+            != jc.template_fingerprint(_axes(), runtime="api"))
+
+
+def test_預算不進指紋():
+    """--max-budget-usd 是保險絲不是判定條件：只是把上限調高，
+    不該看起來像換了一套判定條件。"""
+    schema = jc.build_json_schema(FIELDS)
+    a = jc.template_fingerprint(_axes(), flags=jc.cli_flags(schema, 1.0),
+                                schema=schema)
+    b = jc.template_fingerprint(_axes(), flags=jc.cli_flags(schema, 99.0),
+                                schema=schema)
+    assert a == b
+    # 但旗標名本身要在——拿掉它是真的改變了行為
+    assert "--max-budget-usd" in jc.fingerprint_flags(jc.cli_flags(schema, 1.0))
+
+
+def test_預算是保險絲不是預算():
+    assert jc.budget_usd(225) == round(225 * jc.BUDGET_PER_GROUP_USD
+                                       * jc.BUDGET_SAFETY_FACTOR, 2)
+    assert jc.budget_usd(225) > 225 * jc.BUDGET_PER_GROUP_USD
+    assert jc.budget_usd(0) > 0
+
+
+# --- 退避重試 ---------------------------------------------------------------
+def test_失敗會退避重試(monkeypatch, tmp_path):
+    fake = _FakeRun(["", "", _envelope('{"a":1}')])   # 前兩次空輸出 → ValueError
+    monkeypatch.setattr(jc.subprocess, "run", fake)
+    monkeypatch.setattr(jc.time, "sleep", lambda s: None)
+    got = jc.call_with_backoff("x", ["-p"], tmp_path)
+    assert got["result"] == '{"a":1}'
+    assert len(fake.calls) == 3
+
+
+def test_重試耗盡會_raise_而不是中斷整批(monkeypatch, tmp_path):
+    fake = _FakeRun([""] * (jc.MAX_RETRIES + 1))
+    monkeypatch.setattr(jc.subprocess, "run", fake)
+    monkeypatch.setattr(jc.time, "sleep", lambda s: None)
+    with pytest.raises(ValueError):
+        jc.call_with_backoff("x", ["-p"], tmp_path)
+    assert len(fake.calls) == jc.MAX_RETRIES + 1
+
+
+def test_重試耗盡的訊息不夾帶提示詞(monkeypatch, tmp_path):
+    fake = _FakeRun([""] * (jc.MAX_RETRIES + 1))
+    monkeypatch.setattr(jc.subprocess, "run", fake)
+    monkeypatch.setattr(jc.time, "sleep", lambda s: None)
+    with pytest.raises(ValueError) as exc:
+        jc.call_with_backoff("SECRET-PREFIX-XYZ", ["-p"], tmp_path)
+    assert "SECRET-PREFIX" not in str(exc.value)
