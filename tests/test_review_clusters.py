@@ -366,3 +366,119 @@ def test_三個軸都沒有預設值():
             help_text = rc.FIELD_HELP[field][value]
             for word in ("建議", "推薦", "預設", "多半", "通常"):
                 assert word not in help_text
+
+
+# --- 前綴篩檢模式（--screen）------------------------------------------------
+# 篩檢是送 LLM 之前的閘門。它只問一題，因為多問一題會讓人一邊判風險一邊
+# 判內容，而風險判斷需要保守、內容判斷需要理解，兩者的心態相反。
+def test_篩檢只有一題():
+    assert list(rc.SCREEN_FIELDS) == ["personal_data"]
+
+
+def test_篩檢的值域是三個():
+    assert rc.SCREEN_FIELDS["personal_data"] == ("clean", "flagged", "unsure")
+
+
+def test_篩檢欄位有五欄且都不是內容():
+    assert rc.SCREEN_COLUMNS == ("group_id", "personal_data", "note",
+                                 "elapsed_sec", "screened_at")
+    rc.check_output_columns(rc.SCREEN_COLUMNS)
+
+
+@pytest.mark.parametrize("value", ["clean", "flagged", "unsure"])
+def test_篩檢值域內的值照收(value):
+    assert rc.validate_value("personal_data", value, rc.SCREEN_FIELDS) == value
+
+
+@pytest.mark.parametrize("bad", ["ok", "safe", "clen", "yes"])
+def test_篩檢打錯字被擋下(bad):
+    with pytest.raises(ValueError):
+        rc.validate_value("personal_data", bad, rc.SCREEN_FIELDS)
+
+
+def test_篩檢空白不可當作答案():
+    with pytest.raises(ValueError):
+        rc.validate_value("personal_data", "", rc.SCREEN_FIELDS)
+
+
+def test_篩檢的唯一前綴可以接受():
+    assert rc.validate_value("personal_data", "c", rc.SCREEN_FIELDS) == "clean"
+    assert rc.validate_value("personal_data", "f", rc.SCREEN_FIELDS) == "flagged"
+
+
+def test_篩檢的三軸值域不會誤用到篩檢欄位():
+    # 用預設的 FIELDS 問 personal_data 應該是未知欄位。
+    with pytest.raises(ValueError):
+        rc.validate_value("personal_data", "clean")
+
+
+def test_篩檢沒有預設值():
+    assert set(rc.SCREEN_FIELD_HELP["personal_data"]) == \
+        set(rc.SCREEN_FIELDS["personal_data"])
+    for value, help_text in rc.SCREEN_FIELD_HELP["personal_data"].items():
+        for word in ("建議", "推薦", "預設", "多半", "通常"):
+            assert word not in help_text
+
+
+def test_篩檢寫出的_csv_只有五欄(tmp_path):
+    path = tmp_path / "prefix_screen.csv"
+    rc.append_review(path, dict(group_id="A001", personal_data="clean",
+                                note="", elapsed_sec=5.0,
+                                screened_at="2026-09-06T20:00:00"),
+                     columns=rc.SCREEN_COLUMNS)
+    with path.open(encoding="utf-8-sig", newline="") as fh:
+        rows = list(csv.DictReader(fh))
+    assert list(rows[0].keys()) == list(rc.SCREEN_COLUMNS)
+    assert rows[0]["personal_data"] == "clean"
+    assert rows[0]["note"] == ""          # 程式不預填
+
+
+def test_篩檢的多餘欄位不會落地(tmp_path):
+    path = tmp_path / "s.csv"
+    rc.append_review(path, dict(group_id="A001", personal_data="flagged",
+                                note="n", elapsed_sec=1.0, screened_at="t",
+                                prefix_raw="不該落地的東西"),
+                     columns=rc.SCREEN_COLUMNS)
+    with path.open(encoding="utf-8-sig", newline="") as fh:
+        text = path.read_text(encoding="utf-8-sig")
+    assert "prefix_raw" not in text
+    assert "不該落地的東西" not in text
+
+
+def test_篩檢缺欄位會被擋下(tmp_path):
+    with pytest.raises(ValueError):
+        rc.append_review(tmp_path / "s.csv", dict(group_id="A001"),
+                         columns=rc.SCREEN_COLUMNS)
+
+
+def test_篩檢與審閱用同一個續跑機制(tmp_path):
+    path = tmp_path / "s.csv"
+    rc.append_review(path, dict(group_id="A001", personal_data="clean",
+                                note="", elapsed_sec=1.0, screened_at="t"),
+                     columns=rc.SCREEN_COLUMNS)
+    clusters = _clusters([("A001", 100), ("A002", 50)])
+    todo = rc.pending_groups(clusters, rc.load_done(path))
+    assert list(todo["group_id"]) == ["A002"]
+
+
+def test_篩檢與審閱共用排序():
+    # 兩個模式看到的順序必須一致，否則「第幾批」在兩份紀錄裡不是同一批。
+    clusters = _clusters([("A002", 900), ("B001", 300), ("A001", 10)],
+                         ratios=[0.95, 0.80, 0.01])
+    assert list(rc.pending_groups(clusters, set())["group_id"])[0] == "A001"
+
+
+def test_篩檢模式的路徑與審閱分開():
+    assert rc.SCREEN_CSV != rc.REVIEW_CSV
+    assert rc.SCREEN_CSV.name == "prefix_screen.csv"
+
+
+def test_screen_旗標存在且預設為關():
+    import argparse
+    parser = argparse.ArgumentParser()
+    del parser
+    # 直接驗 main 的介面：--screen 存在，且不帶參數時走完整審閱。
+    source = (REPO.parent / "_rescued_scratchpad" / "review_clusters.py"
+              ).read_text(encoding="utf-8")
+    assert '"--screen"' in source
+    assert "return run_screen() if args.screen else run_review()" in source
