@@ -87,6 +87,40 @@ def test_不會配超過該層的母體數():
     assert sum(got.values()) == 6          # 母體只有 6，抽不到 20
 
 
+# ENGINEERING_NOTES〈保底寫成先給再扣就不是保底〉要求的兩種邊界。
+# 只測「正常比例」的分配永遠不會碰到那個 bug——它兩次都是在正常比例下
+# 寫出來、也在正常比例下通過的。
+def test_邊界一_小層母體極小時保底仍在():
+    got = rs.allocate({"<=1s": 1, "1-10s": 200, ">10s": 2}, 20)
+    assert got["<=1s"] == 1, "母體只有 1 的層被扣成 0 了"
+    assert got[">10s"] >= 1
+    assert sum(got.values()) == 20
+
+
+def test_邊界二_樣本數少於層數要_raise():
+    """靜默地少抽幾層正是那條規則要擋的東西。"""
+    with pytest.raises(ValueError):
+        rs.allocate({"<=1s": 10, "1-10s": 10, ">10s": 10}, 2)
+
+
+def test_邊界二_樣本數剛好等於層數():
+    got = rs.allocate({"<=1s": 10, "1-10s": 10, ">10s": 10}, 3)
+    assert got == {"<=1s": 1, "1-10s": 1, ">10s": 1}
+
+
+def test_空層不佔保底名額():
+    # 只有兩個非空層時，n=2 應該剛好夠，不該因為第三層存在而 raise。
+    got = rs.allocate({"<=1s": 0, "1-10s": 10, ">10s": 10}, 2)
+    assert got == {"<=1s": 0, "1-10s": 1, ">10s": 1}
+
+
+def test_分配後不得超過樣本數():
+    for n in range(3, 25):
+        got = rs.allocate({"<=1s": 48, "1-10s": 148, ">10s": 30}, n)
+        assert sum(got.values()) == n, (n, got)
+        assert all(v >= 1 for v in got.values()), (n, got)
+
+
 def test_空的層配零():
     got = rs.allocate({"<=1s": 0, "1-10s": 10, ">10s": 0}, 5)
     assert got["<=1s"] == 0 and got[">10s"] == 0 and got["1-10s"] == 5
