@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import csv
 import importlib.util
+import io as _io
 import sys
 from pathlib import Path
 
@@ -134,7 +135,10 @@ def test_沒有任何參數可以關掉閘門():
     # --only 在名單裡，理由是它只會讓 todo 變短：apply_only 取的是與
     # clean 名單的交集。新增選項要先想清楚它能不能讓 todo 變長，
     # 能的話就是繞過閘門，不論它叫什麼名字。
+    # `--output` 只決定寫到哪個檔，不決定送哪些群——閘門在 clean_group_ids()
+    # 與 apply_only()，它碰不到。加進白名單是刻意的。
     assert parser_opts <= {"--limit", "--dry-run", "--prefix-field", "--only",
+                           "--output",
                            "-h", "--help"}, parser_opts
     # 而且沒有任何選項的名字聽起來像在繞過閘門。
     for opt in parser_opts:
@@ -975,7 +979,9 @@ def test_只剩一群時上限仍然高於實測單次():
     for n_todo in (1, 2, 5, 225):
         flags = jc.cli_flags(schema)      # 不吃群數，所以 n_todo 動不了它
         budget = float(flags[flags.index("--max-budget-usd") + 1])
-        assert budget > jc.MEASURED_PER_CALL_USD, n_todo
+        # 要蓋過**最差的那一次**，不是平均。實測最高的 B044 是 0.0454，
+        # 成因是那次呼叫在內部跑了兩輪；用平均訂上限會把它擋掉。
+        assert budget > jc.MEASURED_PER_CALL_MAX_USD, n_todo
 
 
 def test_整批上限與逐次上限是兩個數字():
@@ -1065,18 +1071,29 @@ def test_門檻落在實測盲化值與實測預設值之間():
     assert jc.COST_WARN_USD < jc.MEASURED_DEFAULT_CALL_USD
 
 
-def test_實測區間最高的那群不該被判為可疑():
-    """0.0291 是 5 群實測的最高值。舊門檻 0.03 只高它 3%，而母體還有 21 個
-    群的前綴到頂——那些一定越過，然後這個檢查就分不出是哪一件事了。"""
-    assert jc.cost_is_suspicious(0.0291) is False
+def test_實測最貴的那群不該被判為可疑():
+    """實測最高 0.0454（B044，內部兩輪）。門檻壓在它底下就會每跑幾群叫一次，
+    而一個常態誤報的檢查，最後一定會被關掉。"""
+    assert jc.cost_is_suspicious(jc.MEASURED_PER_CALL_MAX_USD) is False
     assert jc.cost_is_suspicious(jc.MEASURED_DEFAULT_CALL_USD) is True
 
 
-def test_未校準時門檻要留餘裕():
-    """校準完把 COST_WARN_CALIBRATED 改成 True，這條就不再要求餘裕。"""
+def test_門檻與實測值的關係():
+    """未校準時要留大餘裕（寧可不叫）；校準後要蓋過實測最高值並留一成。"""
     assert isinstance(jc.COST_WARN_CALIBRATED, bool)
-    if not jc.COST_WARN_CALIBRATED:
-        assert jc.COST_WARN_USD >= 0.0291 * 1.5
+    if jc.COST_WARN_CALIBRATED:
+        assert jc.COST_WARN_USD >= jc.MEASURED_PER_CALL_MAX_USD * 1.1
+    else:
+        assert jc.COST_WARN_USD >= jc.MEASURED_PER_CALL_MAX_USD * 1.5
+
+
+def test_門檻與未盲化實測值之間的餘裕要記在案():
+    """0.06 與 0.0686 只差 14%——這條防線很薄，薄到必須有人知道它薄。
+    真的越過門檻時，要先看 prompt_tokens_total 而不是直接下結論。"""
+    margin = jc.MEASURED_DEFAULT_CALL_USD / jc.COST_WARN_USD
+    assert 1.0 < margin < 1.5
+    source = JUDGE.read_text(encoding="utf-8")
+    assert "prompt_tokens_total` 才是" in source
 
 
 def test_未校準時抬頭要說出來():
@@ -1337,6 +1354,16 @@ def _wire(monkeypatch, tmp_path, group_ids, envelopes, screen_value="clean"):
     return fake, out
 
 
+def _real_fingerprint():
+    """main() 會算出來的那個指紋。舊格式的 fixture 要帶著它，
+    否則會先被指紋守門擋掉——那道守門在遷移之前，而且順序是對的。"""
+    carrier = jc._load_carrier()
+    schema = jc.build_json_schema(carrier.FIELDS)
+    axes = jc.render_axes(carrier.FIELDS, carrier.FIELD_HELP)
+    return jc.template_fingerprint(axes, "raw", runtime="claude_code",
+                                   flags=jc.cli_flags(schema), schema=schema)
+
+
 def _judgement(cost):
     """一筆合法的判定回覆。三軸的值取值域裡的第一個，內容不重要。"""
     body = _json.dumps({"frame_owner": "tool", "disposition": "keep",
@@ -1424,7 +1451,8 @@ def test_舊檔在判定之前就被升級(monkeypatch, tmp_path):
     """升級發生在第一次 append 之前。晚一步就是整個檔案錯位。"""
     fake, out = _wire(monkeypatch, tmp_path, ["A001", "A002"],
                       [_probe(), _judgement(0.0276)])
-    _write_v1(out, [{**ROW_V1, "group_id": "A002"}])
+    _write_v1(out, [{**ROW_V1, "group_id": "A002",
+                     "prompt_sha256": _real_fingerprint()}])
     assert jc.main([]) == 0
     with out.open(encoding="utf-8-sig", newline="") as fh:
         rows = list(csv.DictReader(fh))
@@ -1441,3 +1469,263 @@ def test_flagged_的群連迴圈都進不去(monkeypatch, tmp_path):
     assert jc.main([]) == 0
     assert len(fake.calls) == 0                       # 連盲化探針都不用跑
     assert not out.exists()
+
+
+# ===========================================================================
+# 指紋守門
+#
+# 每一列都寫了 prompt_sha256，但在這之前沒有任何東西讀它——**寫下來不等於
+# 被檢查**。指紋換掉之後 load_done 照樣把舊列當成「已判」，於是新條件一列
+# 都不會產生，而收尾會說「沒有待判的群，結束」，看起來像跑完了。
+# 實際發生過一次：盲化探針的問法改了，107 列變成不可比。
+# ===========================================================================
+def test_讀得出輸出檔裡的指紋(tmp_path):
+    path = tmp_path / "o.csv"
+    jc.append_output(path, {**ROW, "prompt_sha256": "a" * 64})
+    jc.append_output(path, {**ROW, "group_id": "A002", "prompt_sha256": "b" * 64})
+    assert jc.output_fingerprints(path) == {"a" * 64, "b" * 64}
+
+
+def test_沒有檔案時沒有指紋(tmp_path):
+    assert jc.output_fingerprints(tmp_path / "nope.csv") == set()
+    assert jc.stale_fingerprints(tmp_path / "nope.csv", "a" * 64) == set()
+
+
+def test_同一個指紋不算過期(tmp_path):
+    path = tmp_path / "o.csv"
+    jc.append_output(path, {**ROW, "prompt_sha256": "a" * 64})
+    assert jc.stale_fingerprints(path, "a" * 64) == set()
+
+
+def test_不同指紋算過期(tmp_path):
+    path = tmp_path / "o.csv"
+    jc.append_output(path, {**ROW, "prompt_sha256": "a" * 64})
+    assert jc.stale_fingerprints(path, "b" * 64) == {"a" * 64}
+
+
+def test_混著兩個指紋時兩個都要報(tmp_path):
+    """只報一個會讓人以為改名一次就好。"""
+    path = tmp_path / "o.csv"
+    jc.append_output(path, {**ROW, "prompt_sha256": "a" * 64})
+    jc.append_output(path, {**ROW, "group_id": "A002", "prompt_sha256": "b" * 64})
+    assert jc.stale_fingerprints(path, "c" * 64) == {"a" * 64, "b" * 64}
+
+
+def test_指紋不同時_main_停下來而不是靜靜跳過(monkeypatch, tmp_path):
+    """**這一條是重點。** 不擋的話 todo 會是空的，然後印「沒有待判的群，
+    結束」——與真的跑完了一模一樣。"""
+    fake, out = _wire(monkeypatch, tmp_path, ["A001", "A002"],
+                      [_probe(), _judgement(0.03)])
+    jc.append_output(out, {**ROW, "group_id": "A001",
+                           "prompt_sha256": "z" * 64})
+    with pytest.raises(SystemExit) as exc:
+        jc.main([])
+    assert "不可比" in str(exc.value)
+    assert len(fake.calls) == 0          # 一次呼叫都沒發生
+
+
+def test_指紋守門在_dry_run_也會擋(monkeypatch, tmp_path):
+    """要在花錢之前就知道。dry-run 過了才跑，是這支程式的用法。"""
+    fake, out = _wire(monkeypatch, tmp_path, ["A001"], [])
+    jc.append_output(out, {**ROW, "prompt_sha256": "z" * 64})
+    with pytest.raises(SystemExit):
+        jc.main(["--dry-run"])
+
+
+def test_指紋守門的訊息要說出舊指紋(monkeypatch, tmp_path):
+    """改名要帶上舊指紋前 8 碼，訊息不說就得自己去翻檔案。"""
+    fake, out = _wire(monkeypatch, tmp_path, ["A001"], [])
+    jc.append_output(out, {**ROW, "prompt_sha256": "z" * 64})
+    with pytest.raises(SystemExit) as exc:
+        jc.main(["--dry-run"])
+    assert "z" * 16 in str(exc.value)
+
+
+# --- 盲化探針的豁免 ---------------------------------------------------------
+def test_探針的豁免只放行環境資訊():
+    """docstring 早就寫著「Claude Code 注入的環境 context」是刻意不問的，
+    但那個豁免只在 docstring 裡，探針的第 (2) 項字面上仍然涵蓋它——
+    於是它對一個恆真條件時而回 NO 時而回 YES（實測 16 次 15 NO / 1 YES）。
+    **豁免要寫在被執行的那份文字裡，不是寫在旁邊的說明裡。**"""
+    probe = jc.BLIND_PROBE_PROMPT
+    assert "例外" in probe
+    assert "當前日期" in probe
+    # 豁免必須是窄的：除此之外的都算
+    assert "除此之外的任何記憶都算" in probe
+    # 真正危險的三項一項都不能被放行
+    for must in ("CLAUDE.md", "先前的對話紀錄", "讀取檔案系統的工具"):
+        assert must in probe, must
+
+
+def test_探針問法改了指紋就會變():
+    """放寬問法而指紋不變，是這支程式最不能出的錯之一。"""
+    a = jc.template_fingerprint(_axes())
+    original = jc.BLIND_PROBE_PROMPT
+    try:
+        jc.BLIND_PROBE_PROMPT = original + "（放寬）"
+        b = jc.template_fingerprint(_axes())
+    finally:
+        jc.BLIND_PROBE_PROMPT = original
+    assert a != b
+
+
+def test_舊格式但指紋也不同時先擋指紋(monkeypatch, tmp_path):
+    """兩個問題同時存在時，先報不可比的那個——遷移一個不可比的檔案
+    只會讓它看起來更像可以續跑。"""
+    fake, out = _wire(monkeypatch, tmp_path, ["A001", "A002"], [])
+    _write_v1(out, [{**ROW_V1, "group_id": "A002",
+                     "prompt_sha256": "z" * 64}])
+    with pytest.raises(SystemExit) as exc:
+        jc.main(["--dry-run"])
+    assert "不可比" in str(exc.value)
+    # 而且沒有被遷移
+    assert jc.read_header(out) == list(jc.OUTPUT_COLUMNS_V1)
+
+
+# --- OutputGuard：明文不得寫到螢幕上 ----------------------------------------
+#
+# 這是檔頭第 (2)(3) 條的測試。那兩條原本只由「原始碼裡剛好沒有那幾行
+# print」成立，而那是一個性質不是一個保證——所以這裡測的是守門本身，
+# 不是「目前有沒有人 print」。
+
+SECRET = "病患主訴胸悶合併呼吸困難已持續三日目前生命徵象穩定意識清楚"
+"""現造的假前綴，不是真實內容。長度要 > 24 才進得了 n-gram 判準。"""
+
+
+def _guard():
+    buf = _io.StringIO()
+    g = jc.OutputGuard(buf)
+    g.watch(("前綴", SECRET))
+    return g, buf
+
+
+def test_守門讓計數與群編號通過():
+    g, buf = _guard()
+    g.write("  [1/23] A001 ✓  已判 1（0.0190 USD，累計 12s）\n")
+    assert "A001" in buf.getvalue()
+
+
+def test_守門擋下整段明文():
+    g, _ = _guard()
+    with pytest.raises(SystemExit):
+        g.write(SECRET)
+
+
+def test_守門擋下跨_write_接縫的明文():
+    """`print(a, b)` 會分成好幾次 write。禁字被切在兩次之間仍要擋住——
+    不補接縫的話，這道守門用 print 就能繞過去。"""
+    g, _ = _guard()
+    with pytest.raises(SystemExit):
+        g.write(SECRET[:15])
+        g.write(SECRET[15:])
+
+
+def test_守門的中止訊息不含被擋下的明文():
+    """**印出來這道守門自己就是外洩路徑。**"""
+    g, _ = _guard()
+    with pytest.raises(SystemExit) as exc:
+        g.write(SECRET)
+    assert SECRET[:24] not in str(exc.value)
+    assert "前綴" in str(exc.value)          # 只說標籤
+
+
+def test_守門不誤報短的共同片段():
+    """n=24 是刻意訂寬的，與 reason_leaks_prefix 同一個門檻。"""
+    g, buf = _guard()
+    for word in ("使用者", "這個群", "外框佔內容比例高"):
+        g.write(word)
+    assert buf.getvalue()
+
+
+def test_守門的禁字換群就換():
+    g, _ = _guard()
+    g.watch(("前綴", "另一群的前綴" * 8))
+    g.write(SECRET)          # 上一群的前綴不再是禁字
+
+
+def test_clear_之後不再擋():
+    g, buf = _guard()
+    g.clear()
+    g.write(SECRET)
+    assert buf.getvalue() == SECRET
+
+
+def test_reason_也是禁字():
+    g, _ = _guard()
+    g.watch(("前綴", "短"), ("reason", SECRET))
+    with pytest.raises(SystemExit) as exc:
+        g.write(SECRET)
+    assert "reason" in str(exc.value)
+
+
+def test_裝上與卸下會還原_stdout_與_stderr():
+    before = (sys.stdout, sys.stderr)
+    guard = jc.install_output_guard()
+    try:
+        assert isinstance(sys.stdout, jc.OutputGuard)
+        assert isinstance(sys.stderr, jc.OutputGuard)
+        # stderr 也要包：traceback 走 stderr，而 traceback 會把區域變數
+        # 格式化出來，那條路徑上的區域變數包含前綴。
+        guard.watch(("前綴", SECRET))
+        with pytest.raises(SystemExit):
+            sys.stderr.write(SECRET)
+    finally:
+        jc.uninstall_output_guard()
+    assert (sys.stdout, sys.stderr) == before
+
+
+def test_卸下兩次不會出事():
+    jc.install_output_guard()
+    jc.uninstall_output_guard()
+    jc.uninstall_output_guard()
+
+
+def test_真的跑一輪時守門是裝上的(monkeypatch, tmp_path, capsys):
+    """不是只測類別——測 main 有沒有真的把它接上去。"""
+    fake, out = _wire(monkeypatch, tmp_path, ["A001"],
+                      [_probe(), _judgement(0.02)])
+    assert jc.main([]) == 0
+    assert "OutputGuard" in capsys.readouterr().out
+    # 而且跑完要還原，否則後面的測試全部帶著守門跑
+    assert not isinstance(sys.stdout, jc.OutputGuard)
+
+
+# --- --output：重跑而不覆蓋 -------------------------------------------------
+def test_output_寫到別的檔而不是預設檔(monkeypatch, tmp_path):
+    """同指紋重跑一批已判過的群，量的是純雜訊。**不可以就地覆蓋**——
+    覆蓋掉第一次的答案，就沒有東西可以跟第二次比。"""
+    fake, out = _wire(monkeypatch, tmp_path, ["A001"],
+                      [_probe(), _judgement(0.02)])
+    other = tmp_path / "rerun1.csv"
+    assert jc.main(["--output", str(other)]) == 0
+    assert other.exists()
+    assert not out.exists()
+
+
+def test_output_讓已判過的群重新判(monkeypatch, tmp_path):
+    """續跑機制看的是輸出檔裡的 group_id。換一個檔，已判的就該重判——
+    這正是重跑要的行為。"""
+    fake, out = _wire(monkeypatch, tmp_path, ["A001"],
+                      [_probe(), _judgement(0.02), _probe(), _judgement(0.02)])
+    assert jc.main([]) == 0
+    other = tmp_path / "rerun1.csv"
+    assert jc.main(["--output", str(other)]) == 0
+    with other.open(encoding="utf-8-sig", newline="") as fh:
+        assert [r["group_id"] for r in csv.DictReader(fh)] == ["A001"]
+
+
+def test_output_不影響指紋():
+    """**指紋只認判定條件。** 寫到哪個檔不是判定條件——把它算進去，
+    重跑一批來量雜訊就會變成「另一個實驗」，而那正是要比對的東西。"""
+    assert _real_fingerprint() == CURRENT_FINGERPRINT
+
+
+CURRENT_FINGERPRINT = (
+    "a0d19daab4bd80a12ade1061af1464711b85a1854edfc05ca04ad98ef01b8efb")
+"""現行指紋。**改動它要跟全量重跑一起做，不是改個數字讓測試變綠。**
+
+釘在測試裡的理由：指紋在每一列輸出上都有，但沒有東西在讀它——
+`stale_fingerprints` 只在同一個檔案內比對，跨檔、跨次執行沒有人看。
+一個不小心改到模板的編輯會安靜地換掉指紋，而輸出檔看起來一模一樣。
+見 `ref/annotation_protocol.md`〈判定器的重跑條件〉。
+"""
