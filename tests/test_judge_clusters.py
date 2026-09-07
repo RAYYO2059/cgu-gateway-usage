@@ -984,55 +984,56 @@ def test_只剩一群時上限仍然高於實測單次():
         assert budget > jc.MEASURED_PER_CALL_MAX_USD, n_todo
 
 
-def test_整批上限與逐次上限是兩個數字():
-    assert jc.PER_CALL_BUDGET_USD != jc.BATCH_BUDGET_USD
-    assert jc.BATCH_BUDGET_USD > jc.PER_CALL_BUDGET_USD
+def test_失控偵測線與逐次偵測線是兩個數字():
+    assert jc.PER_CALL_BUDGET_USD != jc.RUNAWAY_ABORT_USD
+    assert jc.RUNAWAY_ABORT_USD > jc.PER_CALL_BUDGET_USD
 
 
-def test_逐次上限乘上群數會超過整批上限():
-    """**作用域的最大情況**，也是整批上限存在的理由：225 次各自守住逐次
-    上限，加起來仍然可以是整批上限的兩倍以上。旗標擋不到這件事。"""
-    assert 225 * jc.PER_CALL_BUDGET_USD > jc.BATCH_BUDGET_USD
+def test_逐次乘上群數會超過整批的偵測線():
+    """**作用域的最大情況**，也是整批偵測存在的理由：225 次各自守住逐次
+    的線，加起來仍然可以是整批那條線的兩倍以上。旗標擋不到這件事。"""
+    assert 225 * jc.PER_CALL_BUDGET_USD > jc.RUNAWAY_ABORT_USD
 
 
-def test_整批上限高於實際估計值():
-    """225 群的估計 = 225 次判定 + 9 次盲化檢查。"""
+def test_失控偵測線高於實際估計值():
+    """225 群的估計 = 225 次判定 + 9 次盲化檢查。偵測線要在正常值之上，
+    否則正常執行就會觸發，而一個常態誤報的檢查最後一定會被關掉。"""
     estimate = 225 * jc.MEASURED_PER_CALL_USD + 9 * jc.MEASURED_PROBE_USD
-    assert jc.BATCH_BUDGET_USD > estimate * 2
+    assert jc.RUNAWAY_ABORT_USD > estimate * 2
 
 
-def test_整批累加到超過才停():
-    b = jc.BatchBudget(cap_usd=0.10)
+def test_累計超過才停():
+    b = jc.RunawayDetector(cap_usd=0.10)
     for _ in range(3):
         b.spend(0.03)
     assert b.spent == pytest.approx(0.09)
     assert b.exceeded() is False
 
 
-def test_整批剛好等於上限不停():
+def test_剛好等於偵測線不停():
     """上限是「不准超過」不是「不准達到」。反過來會少判一群而且沒有徵兆。"""
-    b = jc.BatchBudget(cap_usd=0.10)
+    b = jc.RunawayDetector(cap_usd=0.10)
     b.spend(0.10)
     assert b.exceeded() is False
     b.spend(0.0001)
     assert b.exceeded() is True
 
 
-def test_整批記得停在哪一群():
-    b = jc.BatchBudget(cap_usd=0.05)
+def test_記得停在哪一群():
+    b = jc.RunawayDetector(cap_usd=0.05)
     b.spend(0.06)
     assert b.exceeded() is True
     b.stop("A042")
     assert b.stopped_at == "A042"
 
 
-def test_整批一開始沒有停在任何地方():
-    assert jc.BatchBudget().stopped_at is None
+def test_一開始沒有停在任何地方():
+    assert jc.RunawayDetector().stopped_at is None
 
 
 def test_成本缺值另外計數而不是當成零():
     """缺值當 0 累加，整批上限就悄悄失效了——收尾必須看得出來。"""
-    b = jc.BatchBudget(cap_usd=1.0)
+    b = jc.RunawayDetector(cap_usd=1.0)
     b.spend(None)
     b.spend("壞掉的值")
     b.spend(0.02)
@@ -1729,3 +1730,158 @@ CURRENT_FINGERPRINT = (
 一個不小心改到模板的編輯會安靜地換掉指紋，而輸出檔看起來一模一樣。
 見 `ref/annotation_protocol.md`〈判定器的重跑條件〉。
 """
+
+
+# --- 盲化的主要指標：prompt_tokens_total ------------------------------------
+#
+# 成本降級成次要訊號的理由是量出來的：同指紋、同 23 群、同提示詞跑兩次，
+# 成本差 1.53 倍（快取狀態不同），而盲化失效的訊號是 2.4 倍——兩者同一
+# 量級，成本區分不開它們。prompt_tokens_total 對快取不變（兩次中位
+# 1,872 對 1,883）。
+
+def test_單輪帶的上下界來自實測():
+    assert jc.PROMPT_TOKENS_SINGLE_MIN < jc.PROMPT_TOKENS_SINGLE_MAX
+    assert jc.PROMPT_TOKENS_WARN > jc.PROMPT_TOKENS_SINGLE_MAX
+
+
+def test_實測的單輪呼叫不會被判為可疑():
+    """138 次單輪呼叫落在 1,785–2,515。門檻壓進這個區間就會常態誤報。"""
+    for n in (jc.PROMPT_TOKENS_SINGLE_MIN, 2000, jc.PROMPT_TOKENS_SINGLE_MAX):
+        assert jc.prompt_tokens_suspicious(n) is False
+
+
+def test_實測的兩輪呼叫會被判為可疑():
+    """實測兩輪落在 3,847–5,141。它不是盲化問題，但它確實超出單輪帶，
+    該被記下來——**單次分不開兩輪與未盲化**，那是最小值那道的工作。"""
+    for n in (3847, 5141):
+        assert jc.prompt_tokens_suspicious(n) is True
+
+
+def test_token_缺值不算可疑():
+    """舊格式的列沒有這一欄。「沒量到」不是「不正常」。"""
+    assert jc.prompt_tokens_suspicious(None) is False
+    assert jc.prompt_tokens_suspicious("") is False
+
+
+def test_最小值檢查抓得到全批抬高():
+    """預設系統提示是加在每一次呼叫上的常數，抬高的是最小值。"""
+    assert jc.prompt_tokens_floor_broken(jc.PROMPT_TOKENS_SINGLE_MIN) is False
+    assert jc.prompt_tokens_floor_broken(jc.PROMPT_TOKENS_SINGLE_MAX) is False
+    assert jc.prompt_tokens_floor_broken(6000) is True
+
+
+def test_兩輪呼叫抬不動最小值():
+    """**這是最小值那道比單次那道強的地方。** 一批裡混著兩輪呼叫時，
+    最小值仍然落在單輪帶——所以它不會把「跑了兩輪」誤判成「盲化失效」。"""
+    batch = [1785, 1900, 5141, 2515, 4203]      # 混著兩輪的實測值
+    assert jc.prompt_tokens_floor_broken(min(batch)) is False
+    assert sum(jc.prompt_tokens_suspicious(n) for n in batch) == 2
+
+
+def test_一次都沒量到時不下結論():
+    """**空集合不算通過也不算失敗。** 斷言在集合為空時自動成立，
+    是本專案用突變測試抓過的「空真」。"""
+    assert jc.prompt_tokens_floor_broken(None) is False
+
+
+def test_收尾會報出實際量到的_token_最小值(monkeypatch, tmp_path, capsys):
+    """**斷言值，不是斷言字串出現。**
+
+    第一版寫的是 `assert "prompt_tokens_total" in out`，而「沒有量到」
+    那個分支也印同一個詞——於是「最小值從不更新」這個突變體逃掉了，
+    測試照樣全綠。這正是本專案的「空真」：斷言成立，但什麼都沒驗。
+    """
+    fake, out = _wire(monkeypatch, tmp_path, ["A001"],
+                      [_probe(), _judgement(0.02)])
+    assert jc.main([]) == 0
+    text = capsys.readouterr().out
+    # _envelope 的 usage：input 2 + cache_creation 812 + cache_read 0
+    assert "最小 814" in text
+    assert "沒有量到" not in text
+
+
+# --- 用量上限與呼叫失敗要分得開 ---------------------------------------------
+def test_用量上限與一般失敗分成不同的類():
+    assert jc.classify_call_error(1, "Claude usage limit reached") == "usage_limit"
+    assert jc.classify_call_error(1, "429 rate limit exceeded") == "transient"
+    assert jc.classify_call_error(1, "some other explosion") == "failure"
+
+
+def test_分不出來時當成一般失敗():
+    """**保守的方向是 failure**：它會被記錄、被跳過、下次續跑會再試。
+    誤判成 usage_limit 的代價是整批提早停而看起來像跑完了。"""
+    for junk in (None, "", "???", "unhelpful message"):
+        assert jc.classify_call_error(1, junk) == "failure"
+
+
+def test_同時出現兩種字樣時判為用量上限():
+    """兩邊都可能出現 limit。誤判成 transient 的代價是退避五次然後把整批
+    記成失敗；反過來只是早停，可以直接續跑。"""
+    assert jc.classify_call_error(
+        1, "rate limit; usage limit reached") == "usage_limit"
+
+
+def test_分類不會回傳_stderr_的內容():
+    """stderr 可能夾帶提示詞——它是我們自己從 stdin 餵進去的東西。"""
+    secret = "病患主訴胸悶合併呼吸困難已持續三日目前生命徵象穩定"
+    got = jc.classify_call_error(1, f"error: {secret}")
+    assert got in ("usage_limit", "transient", "failure")
+    assert secret not in got
+
+
+def test_用量上限不走退避重試(monkeypatch):
+    """退避管的是秒級的暫時問題；用量上限等的是小時級的重置。
+    在這裡重試五次只是把 190 秒浪費掉，然後仍然失敗。"""
+    calls = []
+
+    def boom(*a, **kw):
+        calls.append(1)
+        raise jc.UsageLimitReached("訂閱用量上限")
+
+    monkeypatch.setattr(jc, "run_claude", boom)
+    monkeypatch.setattr(jc.time, "sleep", lambda s: None)
+    with pytest.raises(jc.UsageLimitReached):
+        jc.call_with_backoff("p", [], Path("."))
+    assert len(calls) == 1
+
+
+def test_一般失敗仍然會退避重試(monkeypatch):
+    calls = []
+
+    def boom(*a, **kw):
+        calls.append(1)
+        raise ValueError("一般失敗")
+
+    monkeypatch.setattr(jc, "run_claude", boom)
+    monkeypatch.setattr(jc.time, "sleep", lambda s: None)
+    with pytest.raises(ValueError):
+        jc.call_with_backoff("p", [], Path("."))
+    assert len(calls) == jc.MAX_RETRIES + 1
+
+
+def test_撞到用量上限就停而不是把剩下的群都記成失敗(monkeypatch, tmp_path, capsys):
+    """**這是分類存在的理由。** 接下來每一群都會撞到同一件事，把它們全部
+    記成失敗是錯的——它們只是還沒判，而「失敗 200 次」與「沒跑 200 群」
+    在收尾訊息裡是兩個完全不同的意思。"""
+    ids = ["A001", "A002", "A003"]
+    fake, out = _wire(monkeypatch, tmp_path, ids, [_probe(), _judgement(0.02)])
+    real = jc.call_with_backoff
+
+    def limited(prompt, flags, cwd):
+        if len(_read(out)) >= 1:
+            raise jc.UsageLimitReached("訂閱用量上限")
+        return real(prompt, flags, cwd)
+
+    monkeypatch.setattr(jc, "call_with_backoff", limited)
+    assert jc.main([]) == 0
+    text = capsys.readouterr().out
+    assert "用量上限" in text
+    assert "失敗：呼叫 0" in text          # 沒有被記成失敗
+    assert len(_read(out)) == 1           # 判成功的那一群留著
+
+
+def _read(path):
+    if not path.exists():
+        return []
+    with path.open(encoding="utf-8-sig", newline="") as fh:
+        return list(csv.DictReader(fh))
