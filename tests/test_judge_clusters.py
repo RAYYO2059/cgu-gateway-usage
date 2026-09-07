@@ -1885,3 +1885,121 @@ def _read(path):
         return []
     with path.open(encoding="utf-8-sig", newline="") as fh:
         return list(csv.DictReader(fh))
+
+
+# --- 協定裡的數字要被機械檢查，不要靠人記得更新 ------------------------------
+#
+# `ref/annotation_protocol.md` 第三節記了測試台的基準一致率。那是手工維護的
+# 數字，而本專案的手工數字每一輪都會過期（CLAUDE.md 的 444 → 456 → 470，
+# 兩輪內錯兩次）。這裡把它接回實際的輸出檔。
+#
+# 判定結果在 repo 外，找不到就 skip 而不是 fail——與判定器本身同一個處理。
+
+PROTOCOL = REPO / "ref" / "annotation_protocol.md"
+OUTPUTS = {
+    "79635e2b": JUDGE.parent / "judge_output.79635e2b.csv",
+    "a0d19daa#1": JUDGE.parent / "judge_output.csv",
+    "a0d19daa#2": JUDGE.parent / "judge_output.a0d19daa.rerun1.csv",
+}
+
+
+def _judgements():
+    """三批共有的群 × 三次判定。缺任何一批就 skip。"""
+    missing = [k for k, v in OUTPUTS.items() if not v.exists()]
+    if missing:
+        pytest.skip(f"判定輸出不在本機（缺 {', '.join(missing)}）")
+    frames = {k: pd.read_csv(v).set_index("group_id") for k, v in OUTPUTS.items()}
+    ids = sorted(set.intersection(*[set(f.index) for f in frames.values()]))
+    return frames, ids
+
+
+def _agreement(frames, ids, axis):
+    """三次全同的比例。"""
+    same = sum(len({frames[k].loc[g, axis] for k in frames}) == 1 for g in ids)
+    return 100.0 * same / len(ids)
+
+
+def _pairwise(frames, ids, axis):
+    """同指紋兩次的一致率。**判讀規則用的是這個，不是三次全同。**"""
+    a, b = frames["a0d19daa#1"], frames["a0d19daa#2"]
+    same = sum(a.loc[g, axis] == b.loc[g, axis] for g in ids)
+    return 100.0 * same / len(ids)
+
+
+@pytest.mark.parametrize("axis,three_way,pairwise", [
+    ("frame_owner", 91.3, 91.3),
+    ("disposition", 69.6, 82.6),
+    ("axis_level", 78.3, 87.0),
+    ("confidence", 69.6, 91.3)])
+def test_協定記的基準一致率與實際輸出相符(axis, three_way, pairwise):
+    """對不上就是協定過期了——**改協定，不要改這個測試的期望值**。
+
+    **兩欄都要驗。** 第一版只驗了一欄，而協定裡四個數字有兩個填成另一種
+    算法的值（`axis_level` 與 `confidence` 填了成對值、`disposition` 填了
+    三次值），並排看不出來。兩欄一起釘住，混用就會失敗。
+    """
+    frames, ids = _judgements()
+    assert _agreement(frames, ids, axis) == pytest.approx(three_way, abs=0.05)
+    assert _pairwise(frames, ids, axis) == pytest.approx(pairwise, abs=0.05)
+
+
+def test_兩種算法在協定裡都出現而且分得開():
+    """`frame_owner` 兩欄剛好相同是巧合，其他三軸都不同——所以協定若只記
+    一欄，另一欄的使用者就會拿錯數字，而拿錯不會有任何徵兆。"""
+    frames, ids = _judgements()
+    diff = [ax for ax in ("disposition", "axis_level", "confidence")
+            if _agreement(frames, ids, ax) != _pairwise(frames, ids, ax)]
+    assert diff == ["disposition", "axis_level", "confidence"]
+    text = PROTOCOL.read_text(encoding="utf-8")
+    assert "三次全同" in text and "同指紋兩次" in text
+
+
+def test_協定記的解析度與測試台大小相符():
+    """一群 = 100/n。n 變了解析度就變，而協定裡兩個數字都是寫死的。"""
+    frames, ids = _judgements()
+    text = PROTOCOL.read_text(encoding="utf-8")
+    assert f"n={len(ids)}" in text
+    assert f"{100 / len(ids):.1f}pp" in text          # 4.3pp
+    assert f"{200 / len(ids):.1f}pp" in text          # 8.7pp
+
+
+def test_協定列的受污染群就是實際不穩定的那些():
+    """七群是「因模型不穩定而被選出」——這個描述本身要成立。
+
+    若之後重跑讓某一群穩定下來，名單不會自己更新，而一份過期的污染名單
+    比沒有名單更危險：它會讓人以為某些群是乾淨的。
+    """
+    frames, ids = _judgements()
+    unstable = {g for g in ids
+                if len({frames[k].loc[g, "disposition"] for k in frames}) > 1}
+    text = PROTOCOL.read_text(encoding="utf-8")
+    listed = {g for g in ids if f"{g}／" in text or f"／{g}" in text}
+    assert listed == unstable, f"協定列的 {sorted(listed)} vs 實際 {sorted(unstable)}"
+
+
+def test_三軸定義改了指紋就會變():
+    """**這是第三節第 2 點的機械證明。**
+
+    字典的邊界要讓判定器看到，就得改 `FIELD_HELP`；而 `FIELD_HELP` 進指紋，
+    所以「字典改後」那兩次必然是新指紋，與基準線的比較必然跨指紋。
+    這不是可以避免的安排，是這個測量的定義本身。
+    """
+    carrier = jc._load_carrier()
+    before = jc.template_fingerprint(
+        jc.render_axes(carrier.FIELDS, carrier.FIELD_HELP))
+    tweaked = {axis: dict(vals) for axis, vals in carrier.FIELD_HELP.items()}
+    tweaked["disposition"]["keep"] += "（補一條邊界定義）"
+    after = jc.template_fingerprint(jc.render_axes(carrier.FIELDS, tweaked))
+    assert before != after
+
+
+def test_判定器不讀_label_dictionary():
+    """第三節第 1 點：只改 `label_dictionary.csv` 判定器看不到。
+
+    釘住它是因為這件事**看起來應該不成立**——檔案叫「標籤字典」，
+    直覺會以為判定器讀它。實際上三軸定義取自載具的 `FIELD_HELP`。
+    哪天有人把它接起來了，這個測試會失敗，而那正是該重新看第三節的時候。
+    """
+    source = JUDGE.read_text(encoding="utf-8")
+    assert "label_dictionary" not in source
+    assert "FIELD_HELP" in jc.CARRIER.read_text(encoding="utf-8")
