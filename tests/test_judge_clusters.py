@@ -47,8 +47,26 @@ ROW = dict(
     axis_level="all_three", reason="結構描述", confidence="high",
     model="claude-opus-5", prompt_sha256="a" * 64,
     judged_at="2026-09-06T20:00:00",
-    total_cost_usd=0.0066, input_tokens=347, output_tokens=151,
-    thinking_tokens=0, duration_ms=1660)
+    total_cost_usd=0.0276, input_tokens=2, output_tokens=349,
+    thinking_tokens=92, cache_creation_input_tokens=812,
+    cache_read_input_tokens=0, prompt_tokens_total=814,
+    schema_version="v2", duration_ms=6695)
+
+# v1 的一列：沒有那三個 token 欄位，也沒有版本欄。
+ROW_V1 = {k: v for k, v in ROW.items()
+          if k in ("group_id", "frame_owner", "disposition", "axis_level",
+                   "reason", "confidence", "model", "prompt_sha256",
+                   "judged_at", "total_cost_usd", "input_tokens",
+                   "output_tokens", "thinking_tokens", "duration_ms")}
+
+
+def _write_v1(path, rows):
+    """照 v1 的表頭寫一個舊格式的輸出檔。"""
+    with path.open("w", encoding="utf-8-sig", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=list(jc.OUTPUT_COLUMNS_V1))
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({k: row[k] for k in jc.OUTPUT_COLUMNS_V1})
 
 
 def _screen(rows):
@@ -113,7 +131,10 @@ def test_沒有任何參數可以關掉閘門():
         pass
     finally:
         argparse.ArgumentParser.add_argument = real
-    assert parser_opts <= {"--limit", "--dry-run", "--prefix-field",
+    # --only 在名單裡，理由是它只會讓 todo 變短：apply_only 取的是與
+    # clean 名單的交集。新增選項要先想清楚它能不能讓 todo 變長，
+    # 能的話就是繞過閘門，不論它叫什麼名字。
+    assert parser_opts <= {"--limit", "--dry-run", "--prefix-field", "--only",
                            "-h", "--help"}, parser_opts
     # 而且沒有任何選項的名字聽起來像在繞過閘門。
     for opt in parser_opts:
@@ -497,7 +518,9 @@ def _envelope(result, **over):
         "type": "result", "subtype": "success", "is_error": False,
         "num_turns": 1, "result": result, "total_cost_usd": 0.0066,
         "duration_ms": 1660,
-        "usage": {"input_tokens": 347, "output_tokens": 151,
+        "usage": {"input_tokens": 2, "output_tokens": 151,
+                  "cache_creation_input_tokens": 812,
+                  "cache_read_input_tokens": 0,
                   "output_tokens_details": {"thinking_tokens": 0}},
     }
     env.update(over)
@@ -556,7 +579,7 @@ def test_信封取得需要的欄位():
     got = jc.parse_envelope(_envelope('{"a": 1}'))
     assert got["result"] == '{"a": 1}'
     assert got["total_cost_usd"] == 0.0066
-    assert got["input_tokens"] == 347
+    assert got["input_tokens"] == 2
     assert got["output_tokens"] == 151
     assert got["thinking_tokens"] == 0
     assert got["duration_ms"] == 1660
@@ -763,11 +786,8 @@ def test_預算不進指紋():
     assert "--max-budget-usd" in jc.fingerprint_flags(jc.cli_flags(schema, 1.0))
 
 
-def test_預算是保險絲不是預算():
-    assert jc.budget_usd(225) == round(225 * jc.BUDGET_PER_GROUP_USD
-                                       * jc.BUDGET_SAFETY_FACTOR, 2)
-    assert jc.budget_usd(225) > 225 * jc.BUDGET_PER_GROUP_USD
-    assert jc.budget_usd(0) > 0
+def test_逐次上限是保險絲不是預算():
+    assert jc.PER_CALL_BUDGET_USD > jc.MEASURED_PER_CALL_USD * 3
 
 
 # --- 退避重試 ---------------------------------------------------------------
@@ -926,3 +946,498 @@ def test_週期檢查失敗時只印型別名():
     block = source.split("盲化自我檢查（第 {n} 群之前）", 1)[1].split("break", 1)[0]
     assert "isinstance(exc, SystemExit)" in block
     assert "type(exc).__name__" in block
+
+
+# ===========================================================================
+# 預算：兩個作用域
+#
+# 這一組是〈保險絲的單位要跟被保護的東西同單位〉的迴歸測試。舊版把群數
+# 乘進 `--max-budget-usd`，於是同一個數字在兩頭都錯而且方向相反：
+# n=1 算出 0.02（低於實際單次 0.0276，最後一群被自己擋掉）、
+# n=225 算出 4.46（是單次的 160 倍，形同不存在）。
+# **所以下面每一條都要指名它驗的是哪一個作用域。**
+# ===========================================================================
+def test_逐次上限不隨群數變動():
+    """舊 bug 的根源：上限的單位是「一次呼叫」，群數不該出現在裡面。"""
+    schema = jc.build_json_schema(FIELDS)
+    flags = jc.cli_flags(schema)
+    assert flags[flags.index("--max-budget-usd") + 1] == \
+        f"{jc.PER_CALL_BUDGET_USD:.2f}"
+    # 而且函式簽名裡沒有群數可以傳進來
+    import inspect
+    assert "n_groups" not in inspect.signature(jc.cli_flags).parameters
+
+
+def test_只剩一群時上限仍然高於實測單次():
+    """**作用域的最小情況。** 舊版 budget_usd(1)=0.02 < 實測 0.0276——
+    續跑到最後一群時，那一群會被自己的保險絲擋掉，看起來卻像模型拒答。"""
+    schema = jc.build_json_schema(FIELDS)
+    for n_todo in (1, 2, 5, 225):
+        flags = jc.cli_flags(schema)      # 不吃群數，所以 n_todo 動不了它
+        budget = float(flags[flags.index("--max-budget-usd") + 1])
+        assert budget > jc.MEASURED_PER_CALL_USD, n_todo
+
+
+def test_整批上限與逐次上限是兩個數字():
+    assert jc.PER_CALL_BUDGET_USD != jc.BATCH_BUDGET_USD
+    assert jc.BATCH_BUDGET_USD > jc.PER_CALL_BUDGET_USD
+
+
+def test_逐次上限乘上群數會超過整批上限():
+    """**作用域的最大情況**，也是整批上限存在的理由：225 次各自守住逐次
+    上限，加起來仍然可以是整批上限的兩倍以上。旗標擋不到這件事。"""
+    assert 225 * jc.PER_CALL_BUDGET_USD > jc.BATCH_BUDGET_USD
+
+
+def test_整批上限高於實際估計值():
+    """225 群的估計 = 225 次判定 + 9 次盲化檢查。"""
+    estimate = 225 * jc.MEASURED_PER_CALL_USD + 9 * jc.MEASURED_PROBE_USD
+    assert jc.BATCH_BUDGET_USD > estimate * 2
+
+
+def test_整批累加到超過才停():
+    b = jc.BatchBudget(cap_usd=0.10)
+    for _ in range(3):
+        b.spend(0.03)
+    assert b.spent == pytest.approx(0.09)
+    assert b.exceeded() is False
+
+
+def test_整批剛好等於上限不停():
+    """上限是「不准超過」不是「不准達到」。反過來會少判一群而且沒有徵兆。"""
+    b = jc.BatchBudget(cap_usd=0.10)
+    b.spend(0.10)
+    assert b.exceeded() is False
+    b.spend(0.0001)
+    assert b.exceeded() is True
+
+
+def test_整批記得停在哪一群():
+    b = jc.BatchBudget(cap_usd=0.05)
+    b.spend(0.06)
+    assert b.exceeded() is True
+    b.stop("A042")
+    assert b.stopped_at == "A042"
+
+
+def test_整批一開始沒有停在任何地方():
+    assert jc.BatchBudget().stopped_at is None
+
+
+def test_成本缺值另外計數而不是當成零():
+    """缺值當 0 累加，整批上限就悄悄失效了——收尾必須看得出來。"""
+    b = jc.BatchBudget(cap_usd=1.0)
+    b.spend(None)
+    b.spend("壞掉的值")
+    b.spend(0.02)
+    assert b.unknown == 2
+    assert b.spent == pytest.approx(0.02)
+
+
+def test_探針與判定的成本都進整批記帳():
+    """盲化檢查也花錢。只算判定會讓整批上限比它宣稱的寬。"""
+    source = JUDGE.read_text(encoding="utf-8")
+    body = source.split("def main(", 1)[1]
+    assert body.count("budget.spend(probe.get") == 2      # 啟動 + 每 25 群
+    assert "budget.spend(env.get" in body
+
+
+def test_整批上限的檢查在迴圈裡而且會停下來():
+    """`--max-budget-usd` 管不到整批，所以這件事只能由迴圈自己做。"""
+    source = JUDGE.read_text(encoding="utf-8")
+    body = source.split("for n, gid in enumerate(todo, 1):", 1)[1]
+    block = body.split("budget.exceeded()", 1)[1].split("\n\n", 1)[0]
+    assert "budget.stop(gid)" in block
+    assert "break" in block
+
+
+def test_不再有把群數乘進上限的函式():
+    """名字對不上語義的函式留著，下一個人會再用它一次。"""
+    source = JUDGE.read_text(encoding="utf-8")
+    for gone in ("budget_usd", "BUDGET_PER_GROUP_USD", "BUDGET_SAFETY_FACTOR"):
+        assert gone not in source, gone
+
+
+# --- 成本門檻的重訂 ---------------------------------------------------------
+def test_門檻落在實測盲化值與實測預設值之間():
+    """門檻的用途是分辨這兩件事，所以它必須在兩者之間。"""
+    assert jc.MEASURED_PER_CALL_USD < jc.COST_WARN_USD
+    assert jc.COST_WARN_USD < jc.MEASURED_DEFAULT_CALL_USD
+
+
+def test_實測區間最高的那群不該被判為可疑():
+    """0.0291 是 5 群實測的最高值。舊門檻 0.03 只高它 3%，而母體還有 21 個
+    群的前綴到頂——那些一定越過，然後這個檢查就分不出是哪一件事了。"""
+    assert jc.cost_is_suspicious(0.0291) is False
+    assert jc.cost_is_suspicious(jc.MEASURED_DEFAULT_CALL_USD) is True
+
+
+def test_未校準時門檻要留餘裕():
+    """校準完把 COST_WARN_CALIBRATED 改成 True，這條就不再要求餘裕。"""
+    assert isinstance(jc.COST_WARN_CALIBRATED, bool)
+    if not jc.COST_WARN_CALIBRATED:
+        assert jc.COST_WARN_USD >= 0.0291 * 1.5
+
+
+def test_未校準時抬頭要說出來():
+    """一個沒有標記的暫定值，三個月後就是一個看起來量過的值。"""
+    source = JUDGE.read_text(encoding="utf-8")
+    assert "COST_WARN_CALIBRATED" in source.split("def main(", 1)[1]
+
+
+# --- token 三欄 -------------------------------------------------------------
+def test_信封取得快取兩欄與總和():
+    got = jc.parse_envelope(_envelope("{}"))
+    assert got["cache_creation_input_tokens"] == 812
+    assert got["cache_read_input_tokens"] == 0
+    assert got["prompt_tokens_total"] == 814
+
+
+def test_input_tokens_單獨看會嚴重低估():
+    """v1 那五列全是 2。那不是「提示詞只有 2 個 token」。"""
+    got = jc.parse_envelope(_envelope("{}"))
+    assert got["input_tokens"] == 2
+    assert got["prompt_tokens_total"] > got["input_tokens"] * 100
+
+
+def test_三者相加():
+    assert jc.prompt_tokens_total(2, 812, 0) == 814
+    assert jc.prompt_tokens_total(0, 0, 0) == 0
+    assert jc.prompt_tokens_total(10, 20, 30) == 60
+
+
+@pytest.mark.parametrize("parts", [(None, 812, 0), (2, None, 0), (2, 812, None),
+                                   (None, None, None)])
+def test_缺任一欄回_None_而不是用零補(parts):
+    """0 補出來的總數看起來合理、不會報錯、而且必定偏小。"""
+    assert jc.prompt_tokens_total(*parts) is None
+
+
+def test_非數字回_None():
+    assert jc.prompt_tokens_total(2, "x", 0) is None
+
+
+def test_信封沒有_usage_時三欄都是_None():
+    env = _json.dumps({"type": "result", "subtype": "success",
+                       "is_error": False, "result": "{}"})
+    got = jc.parse_envelope(env)
+    assert got["cache_creation_input_tokens"] is None
+    assert got["cache_read_input_tokens"] is None
+    assert got["prompt_tokens_total"] is None
+
+
+def test_快取欄位改名時會變成整欄空值而不是偏小的數():
+    """欄位改名是看得見的失效；補 0 是看不見的失效。"""
+    env = _json.loads(_envelope("{}"))
+    env["usage"]["cache_creation_tokens"] = \
+        env["usage"].pop("cache_creation_input_tokens")
+    got = jc.parse_envelope(_json.dumps(env))
+    assert got["prompt_tokens_total"] is None
+
+
+# --- 輸出格式版本與遷移 -----------------------------------------------------
+def test_v2_欄位含三個_token_欄位與版本欄():
+    for col in ("cache_creation_input_tokens", "cache_read_input_tokens",
+                "prompt_tokens_total", "schema_version"):
+        assert col in jc.OUTPUT_COLUMNS, col
+    jc.check_output_columns(jc.OUTPUT_COLUMNS)
+
+
+def test_v1_是_v2_的前綴():
+    """新欄位一律往後加。插在中間會讓遷移前後的欄位對不起來。"""
+    assert list(jc.OUTPUT_COLUMNS[:len(jc.OUTPUT_COLUMNS_V1)]) == \
+        list(jc.OUTPUT_COLUMNS_V1)
+
+
+def test_升級後舊列的三欄留空(tmp_path):
+    path = tmp_path / "o.csv"
+    _write_v1(path, [ROW_V1])
+    assert jc.migrate_output(path) == 1
+    with path.open(encoding="utf-8-sig", newline="") as fh:
+        rows = list(csv.DictReader(fh))
+    assert list(rows[0].keys()) == list(jc.OUTPUT_COLUMNS)
+    for col in ("cache_creation_input_tokens", "cache_read_input_tokens",
+                "prompt_tokens_total"):
+        assert rows[0][col] == "", col
+
+
+def test_升級不回填猜測值(tmp_path):
+    """**不是 0，也不是 input_tokens 的複製。** 兩者都會讓舊列看起來像量過
+    的列，而這個檔案的用途正是分辨這件事。"""
+    path = tmp_path / "o.csv"
+    _write_v1(path, [ROW_V1])
+    jc.migrate_output(path)
+    with path.open(encoding="utf-8-sig", newline="") as fh:
+        row = next(csv.DictReader(fh))
+    assert row["prompt_tokens_total"] not in ("0", "2")
+    assert row["input_tokens"] == "2"          # 原本量到的值不動
+
+
+def test_升級後舊列標記為_v1(tmp_path):
+    path = tmp_path / "o.csv"
+    _write_v1(path, [ROW_V1, {**ROW_V1, "group_id": "A002"}])
+    assert jc.migrate_output(path) == 2
+    with path.open(encoding="utf-8-sig", newline="") as fh:
+        rows = list(csv.DictReader(fh))
+    assert [r["schema_version"] for r in rows] == ["v1", "v1"]
+
+
+def test_升級後新寫的列是_v2_而且看得出哪列是哪版(tmp_path):
+    path = tmp_path / "o.csv"
+    _write_v1(path, [ROW_V1])
+    jc.migrate_output(path)
+    jc.append_output(path, {**ROW, "group_id": "A002"})
+    with path.open(encoding="utf-8-sig", newline="") as fh:
+        rows = list(csv.DictReader(fh))
+    assert [r["schema_version"] for r in rows] == ["v1", "v2"]
+    assert rows[0]["prompt_tokens_total"] == ""
+    assert rows[1]["prompt_tokens_total"] == "814"
+
+
+def test_升級是冪等的(tmp_path):
+    path = tmp_path / "o.csv"
+    _write_v1(path, [ROW_V1])
+    jc.migrate_output(path)
+    before = path.read_bytes()
+    assert jc.migrate_output(path) == 0
+    assert path.read_bytes() == before
+
+
+def test_沒有檔案時不需要升級(tmp_path):
+    assert jc.migrate_output(tmp_path / "nope.csv") == 0
+
+
+def test_不認得的表頭不動它而是報錯(tmp_path):
+    path = tmp_path / "o.csv"
+    path.write_text("group_id,某個沒看過的欄\nA001,x\n", encoding="utf-8-sig")
+    before = path.read_bytes()
+    with pytest.raises(ValueError):
+        jc.migrate_output(path)
+    assert path.read_bytes() == before
+
+
+def test_舊表頭時_append_會報錯而不是錯位寫入(tmp_path):
+    """**這一條是重點。** DictWriter 不看既有表頭，它照 fieldnames 寫：
+    表頭 14 欄而每列 18 格，檔案仍然是合法的 csv，讀出來每一欄都錯位，
+    而且沒有任何徵兆。"""
+    path = tmp_path / "o.csv"
+    _write_v1(path, [ROW_V1])
+    with pytest.raises(ValueError) as exc:
+        jc.append_output(path, dict(ROW))
+    assert "migrate_output" in str(exc.value)
+    with path.open(encoding="utf-8-sig", newline="") as fh:
+        rows = list(csv.DictReader(fh))
+    assert len(rows) == 1                       # 沒有被寫進去
+
+
+def test_升級後續跑仍然讀得到已判的群(tmp_path):
+    path = tmp_path / "o.csv"
+    _write_v1(path, [ROW_V1, {**ROW_V1, "group_id": "A002"}])
+    jc.migrate_output(path)
+    assert jc.load_done(path) == {"A001", "A002"}
+
+
+# --- --only 不繞過閘門 ------------------------------------------------------
+def test_only_只會讓待判變短():
+    todo, refused = jc.apply_only(["A001", "A002", "A003"], "A002,A003")
+    assert todo == ["A002", "A003"]
+    assert refused == []
+
+
+def test_only_指名沒通過閘門的群一樣不送():
+    """**最重要的一條。** --only 是交集不是聯集：閘門在它之前，
+    它不能把任何一個沒通過篩檢的群加回來。"""
+    todo, refused = jc.apply_only(["A001"], "A001,A002,B999")
+    assert todo == ["A001"]
+    assert refused == ["A002", "B999"]
+
+
+def test_only_指名的群全部沒通過時待判是空的():
+    todo, refused = jc.apply_only(["A001"], "FLAGGED-1,FLAGGED-2")
+    assert todo == []
+    assert refused == ["FLAGGED-1", "FLAGGED-2"]
+
+
+def test_沒給_only_時原樣不動():
+    todo, refused = jc.apply_only(["A001", "A002"], None)
+    assert todo == ["A001", "A002"]
+    assert refused == []
+
+
+@pytest.mark.parametrize("junk", ["", "  ", ",,", " , "])
+def test_only_給了但解不出任何群就什麼都不送(junk):
+    """**方向要對，判準是 None 不是 falsy。** 打錯的 --only 解成「全部」
+    會送出 225 群，解成「零群」只是白跑一趟。`--only ""`（shell 變數是空的）
+    在 falsy 判準下正好落進前者。寧可漏送不可誤送，跟閘門同一個方向。"""
+    todo, refused = jc.apply_only(["A001", "A002"], junk)
+    assert todo == []
+
+
+def test_only_容忍空白與尾逗號():
+    todo, refused = jc.apply_only(["A001", "A002"], " A001 , A002 ,")
+    assert todo == ["A001", "A002"]
+    assert refused == []
+
+
+def test_only_被拒絕的群要說出來而不是安靜少送():
+    """安靜地少送幾群，看起來會像那幾群本來就不在名單裡。"""
+    source = JUDGE.read_text(encoding="utf-8")
+    body = source.split("def main(", 1)[1]
+    assert "refused" in body and "不送" in body
+
+
+def test_only_在閘門之後才套用():
+    source = JUDGE.read_text(encoding="utf-8")
+    body = source.split("def main(", 1)[1]
+    gate = body.index("todo = [g for g in all_ids if g in clean")
+    assert gate < body.index("apply_only(todo"), "--only 必須在閘門之後套用"
+
+
+# ===========================================================================
+# 整批上限：真的跑一次迴圈
+#
+# 上面那條 test_整批上限的檢查在迴圈裡而且會停下來 是比對來源字串的，而
+# 來源比對驗不了「這條路徑真的會被走到」——把它改成 `if False and
+# budget.exceeded():` 之後，整組測試照樣全過。突變測試就是這樣抓到的。
+# 見 ENGINEERING_NOTES〈測試可以驗一個永遠不會被執行的路徑〉。
+#
+# 所以這一組真的呼叫 main()：subprocess 全程 mock（**不呼叫 claude**），
+# 資料檔是現造的假資料，判定結果的內容不重要，重要的是迴圈停在哪裡。
+# ===========================================================================
+def _fake_dataset(tmp_path, group_ids, screen_value="clean"):
+    """造一組最小的資料檔，讓 main() 跑得起來。內容全部是現編的。"""
+    meta = pd.DataFrame([{
+        "group_id": g, "uid數": 3, "相異內容數": 40, "請求數": 120,
+        "前綴佔中位內容長度比例": 0.4, "unit_type分布": "{}",
+        "request_style分布": "{}", "內容長度_中位": 800,
+    } for g in group_ids])
+    meta.to_parquet(tmp_path / "clusters.parquet")
+    pd.DataFrame([{
+        "group_id": g, "prefix_raw": f"FRAME-{g}-" + "x" * 40,
+        "prefix_normalized": f"FRAME-{g}-" + "x" * 40,
+        "prefix_len_raw": 50, "prefix_len_normalized": 50, "truncated": False,
+    } for g in group_ids]).to_parquet(tmp_path / "prefixes.parquet")
+    pd.DataFrame([{"group_id": g, "personal_data": screen_value}
+                  for g in group_ids]).to_csv(
+        tmp_path / "screen.csv", index=False, encoding="utf-8-sig")
+    return (tmp_path / "prefixes.parquet", tmp_path / "clusters.parquet",
+            tmp_path / "screen.csv", tmp_path / "out.csv")
+
+
+def _wire(monkeypatch, tmp_path, group_ids, envelopes, screen_value="clean"):
+    prefixes, clusters, screen, out = _fake_dataset(
+        tmp_path, group_ids, screen_value)
+    monkeypatch.setattr(jc, "PREFIXES", prefixes)
+    monkeypatch.setattr(jc, "CLUSTERS", clusters)
+    monkeypatch.setattr(jc, "SCREEN_CSV", screen)
+    monkeypatch.setattr(jc, "OUTPUT_CSV", out)
+    monkeypatch.setattr(jc.shutil, "which", lambda name: "C:/fake/claude.CMD")
+    fake = _FakeRun(envelopes)
+    monkeypatch.setattr(jc.subprocess, "run", fake)
+    return fake, out
+
+
+def _judgement(cost):
+    """一筆合法的判定回覆。三軸的值取值域裡的第一個，內容不重要。"""
+    body = _json.dumps({"frame_owner": "tool", "disposition": "keep",
+                        "axis_level": "none", "reason": "結構描述",
+                        "confidence": "medium"}, ensure_ascii=False)
+    return _envelope(body, total_cost_usd=cost)
+
+
+def _probe():
+    return _envelope(_json.dumps({"answer": "NO", "kind": ""}))
+
+
+def test_整批上限用完就停在那一群(monkeypatch, tmp_path, capsys):
+    """**真的跑迴圈。** 每群 20 USD、上限 15：第一群判完就該停，
+    後面兩群完全不呼叫。"""
+    ids = ["A001", "A002", "A003"]
+    fake, out = _wire(monkeypatch, tmp_path, ids,
+                      [_probe(), _judgement(20.0), _judgement(20.0),
+                       _judgement(20.0)])
+    assert jc.main([]) == 0
+    printed = capsys.readouterr().out
+    with out.open(encoding="utf-8-sig", newline="") as fh:
+        rows = list(csv.DictReader(fh))
+    assert [r["group_id"] for r in rows] == ["A001"]     # 只判了一群
+    assert len(fake.calls) == 2                          # 探針 + 一次判定
+    assert "整批上限" in printed and "停在 A001" in printed
+
+
+def test_沒超過上限就把全部判完(monkeypatch, tmp_path):
+    """對照組。沒有它，上一條在「永遠停在第一群」時也會過。"""
+    ids = ["A001", "A002", "A003"]
+    fake, out = _wire(monkeypatch, tmp_path, ids,
+                      [_probe()] + [_judgement(0.0276)] * 3)
+    assert jc.main([]) == 0
+    with out.open(encoding="utf-8-sig", newline="") as fh:
+        rows = list(csv.DictReader(fh))
+    assert [r["group_id"] for r in rows] == ids
+    assert len(fake.calls) == 4
+
+
+def test_停下來時已判的那一群留著(monkeypatch, tmp_path):
+    """花掉的錢收不回來，那一群的結果是有效的。"""
+    fake, out = _wire(monkeypatch, tmp_path, ["A001", "A002"],
+                      [_probe(), _judgement(20.0), _judgement(20.0)])
+    jc.main([])
+    assert jc.load_done(out) == {"A001"}
+
+
+def test_停下來之後續跑會接著判(monkeypatch, tmp_path):
+    """整批上限是每次執行各自算的，續跑不會被上一次的累計卡住。"""
+    fake, out = _wire(monkeypatch, tmp_path, ["A001", "A002"],
+                      [_probe(), _judgement(20.0), _judgement(20.0)])
+    jc.main([])
+    fake2, out2 = _wire(monkeypatch, tmp_path, ["A001", "A002"],
+                        [_probe(), _judgement(20.0)])
+    assert out2 == out
+    jc.main([])
+    assert jc.load_done(out) == {"A001", "A002"}
+
+
+def test_探針的成本也算進整批(monkeypatch, tmp_path):
+    """探針一次 0.0184，225 群要跑 9 次。只算判定會讓上限比宣稱的寬。"""
+    probe_env = _envelope(_json.dumps({"answer": "NO", "kind": ""}),
+                          total_cost_usd=20.0)
+    fake, out = _wire(monkeypatch, tmp_path, ["A001", "A002"],
+                      [probe_env, _judgement(0.01), _judgement(0.01)])
+    jc.main([])
+    # 探針就已經把上限用掉了，所以判完第一群就停
+    assert jc.load_done(out) == {"A001"}
+
+
+def test_寫出來的列是_v2_而且三個_token_欄位有值(monkeypatch, tmp_path):
+    fake, out = _wire(monkeypatch, tmp_path, ["A001"],
+                      [_probe(), _judgement(0.0276)])
+    jc.main([])
+    with out.open(encoding="utf-8-sig", newline="") as fh:
+        row = next(csv.DictReader(fh))
+    assert row["schema_version"] == "v2"
+    assert row["input_tokens"] == "2"
+    assert row["cache_creation_input_tokens"] == "812"
+    assert row["prompt_tokens_total"] == "814"
+
+
+def test_舊檔在判定之前就被升級(monkeypatch, tmp_path):
+    """升級發生在第一次 append 之前。晚一步就是整個檔案錯位。"""
+    fake, out = _wire(monkeypatch, tmp_path, ["A001", "A002"],
+                      [_probe(), _judgement(0.0276)])
+    _write_v1(out, [{**ROW_V1, "group_id": "A002"}])
+    assert jc.main([]) == 0
+    with out.open(encoding="utf-8-sig", newline="") as fh:
+        rows = list(csv.DictReader(fh))
+    assert [r["group_id"] for r in rows] == ["A002", "A001"]
+    assert [r["schema_version"] for r in rows] == ["v1", "v2"]
+    assert rows[0]["prompt_tokens_total"] == ""       # 舊列不回填
+    assert rows[1]["prompt_tokens_total"] == "814"
+
+
+def test_flagged_的群連迴圈都進不去(monkeypatch, tmp_path):
+    """閘門的端到端驗證：整批跑完一次呼叫都沒有發生。"""
+    fake, out = _wire(monkeypatch, tmp_path, ["A001", "A002"],
+                      [_probe()], screen_value="flagged")
+    assert jc.main([]) == 0
+    assert len(fake.calls) == 0                       # 連盲化探針都不用跑
+    assert not out.exists()
