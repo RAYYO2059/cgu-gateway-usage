@@ -93,14 +93,10 @@ def test_代表選取與_build_clusters_一致():
 # --- 值域檢查 ---------------------------------------------------------------
 # 打錯字要擋下來。不擋的話 csv 裡會出現 "remvoe"，而彙總時那一列會被
 # 靜默歸到別處或消失——這種錯誤沒有測試抓得到，只能在輸入端擋。
+# **值域從 rc.FIELDS 取，不在測試裡抄一份。** 抄一份的話，值域改了要改兩處，
+# 而漏改的那一處會讓測試繼續驗一組已經不存在的值——看起來全綠。
 @pytest.mark.parametrize("field,value", [
-    ("frame_owner", "tool"), ("frame_owner", "user"),
-    ("frame_owner", "none"), ("frame_owner", "unsure"),
-    ("disposition", "remove"), ("disposition", "keep"),
-    ("disposition", "split"), ("disposition", "unsure"),
-    ("axis_level", "all_three"), ("axis_level", "invocation_only"),
-    ("axis_level", "none"), ("axis_level", "unsure"),
-])
+    (f, v) for f, vals in rc.FIELDS.items() for v in vals])
 def test_值域內的值照收(field, value):
     assert rc.validate_value(field, value) == value
 
@@ -127,7 +123,7 @@ def test_空白不可當作答案():
 
 def test_唯一前綴可以接受():
     assert rc.validate_value("frame_owner", "t") == "tool"
-    assert rc.validate_value("disposition", "rem") == "remove"
+    assert rc.validate_value("disposition", "batch") == "batch_project"
     assert rc.validate_value("axis_level", "inv") == "invocation_only"
 
 
@@ -142,7 +138,7 @@ def test_有歧義的前綴被擋下():
 
 def test_大小寫不敏感():
     assert rc.validate_value("frame_owner", "TOOL") == "tool"
-    assert rc.validate_value("disposition", "Keep") == "keep"
+    assert rc.validate_value("disposition", "Batch_Project") == "batch_project"
 
 
 def test_未知欄位被擋下():

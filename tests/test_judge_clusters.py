@@ -36,16 +36,24 @@ def _load():
 
 jc = _load()
 
+# **合成值域，刻意不跟著真實值域走。** `parse_judgement` 收哪一組值是由參數
+# 決定的，用真實值域測等於把「解析器對不對」與「值域是什麼」綁在一起——
+# 值域改一次，這一批與解析無關的測試就要全改一次。
 FIELDS = {
     "frame_owner": ("tool", "user", "none", "unsure"),
     "disposition": ("remove", "keep", "split", "unsure"),
     "axis_level": ("all_three", "invocation_only", "none", "unsure"),
 }
 
+# 真實值域。**用到它的是那些會碰到載具的測試**，所以從載具取，不抄一份。
+CARRIER_FIELDS = jc._load_carrier().FIELD_HELP
+FIRST = {ax: next(iter(vals)) for ax, vals in CARRIER_FIELDS.items()}
+
 
 ROW = dict(
-    group_id="A001", frame_owner="tool", disposition="remove",
-    axis_level="all_three", reason="結構描述", confidence="high",
+    group_id="A001", frame_owner=FIRST["frame_owner"],
+    disposition=FIRST["disposition"], axis_level=FIRST["axis_level"],
+    reason="結構描述", confidence="high",
     model="claude-opus-5", prompt_sha256="a" * 64,
     judged_at="2026-09-06T20:00:00",
     total_cost_usd=0.0276, input_tokens=2, output_tokens=349,
@@ -1367,8 +1375,7 @@ def _real_fingerprint():
 
 def _judgement(cost):
     """一筆合法的判定回覆。三軸的值取值域裡的第一個，內容不重要。"""
-    body = _json.dumps({"frame_owner": "tool", "disposition": "keep",
-                        "axis_level": "none", "reason": "結構描述",
+    body = _json.dumps({**FIRST, "reason": "結構描述",
                         "confidence": "medium"}, ensure_ascii=False)
     return _envelope(body, total_cost_usd=cost)
 
@@ -1722,8 +1729,17 @@ def test_output_不影響指紋():
 
 
 CURRENT_FINGERPRINT = (
-    "a0d19daab4bd80a12ade1061af1464711b85a1854edfc05ca04ad98ef01b8efb")
+    "240ffe175a40866f39386f7f7d3a179344447eff40d22b6861dfdb0f0a9e95c5")
 """現行指紋。**改動它要跟全量重跑一起做，不是改個數字讓測試變綠。**
+
+沿革（每一次都要寫明換的理由，否則下一個人分不出「有意的」與「改綠的」）：
+
+- `79635e2b…`  107 群那一批
+- `a0d19daab…` 探針問法改寬；測試台 A001–A023 判了兩次
+- `240ffe175…` **本次**：disposition 值域從 remove／keep／split 改成
+  tool_injected／batch_project／service_relay／user_envelope／insufficient，
+  frame_owner 的 tool／user 改用散布度定義。
+  **既有 130 筆判定的 disposition 值不在新值域裡，不可與新結果並排。**
 
 釘在測試裡的理由：指紋在每一列輸出上都有，但沒有東西在讀它——
 `stale_fingerprints` 只在同一個檔案內比對，跨檔、跨次執行沒有人看。
@@ -1988,7 +2004,7 @@ def test_三軸定義改了指紋就會變():
     before = jc.template_fingerprint(
         jc.render_axes(carrier.FIELDS, carrier.FIELD_HELP))
     tweaked = {axis: dict(vals) for axis, vals in carrier.FIELD_HELP.items()}
-    tweaked["disposition"]["keep"] += "（補一條邊界定義）"
+    tweaked["disposition"][FIRST["disposition"]] += "（補一條邊界定義）"
     after = jc.template_fingerprint(jc.render_axes(carrier.FIELDS, tweaked))
     assert before != after
 
