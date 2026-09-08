@@ -2255,8 +2255,12 @@ def test_協定明寫大群在污染側():
         # 提到這個群、而且句子裡有千分位數字的每一行，都要帶對的筆數。
         # **不能只要求「有一行對」**：同一個群在這一節裡出現兩次，
         # 只驗一行的話改壞其中一處不會被發現（第一版就漏掉了這個突變）。
+        # **只看散文行，表格行不算。** 〈最大的群〉那張表同一列會並排兩種
+        # 單位（相異內容數與請求數），拿請求數去要求它每一格都對是錯的要求
+        # ——那張表由 test_協定記的最大群與實際相符 逐格驗。
         lines = [ln for ln in body.splitlines()
-                 if f"`{g}`" in ln and re.search(r"\d,\d{3}", ln)]
+                 if f"`{g}`" in ln and re.search(r"\d,\d{3}", ln)
+                 and not ln.lstrip().startswith("|")]
         assert lines, f"協定的涵蓋率一節裡沒有「{g} 帶著筆數」"
         for ln in lines:
             assert f"{n:,}" in ln, f"{g} 應為 {n:,}：{ln.strip()}"
@@ -2295,6 +2299,7 @@ def test_工程筆記的條目都在某個分節底下():
             placement[line[3:].strip()] = group
     assert placement["差小於量測解析度時，不要從方向讀出結論"] == "計數與聚合"
     assert placement["重複次數可能編碼的是位置，不是性質"] == "計數與聚合"
+    assert placement["「取前 N 個」不是抽樣，除非你知道排序規則"] == "計數與聚合"
     assert placement["兩個消費者共用一個可變物件時，重新綁定只會更新其中一個"] \
         == "沉默的失效"
     assert placement["明文邊界要涵蓋例外訊息"] == "辨識與去識別"
@@ -2312,3 +2317,89 @@ def test_工程筆記的交叉引用都指得到():
     flat = re.sub(r"\n\s*", "", text)
     for ref in re.findall(r"見〈(.+?)〉", flat):
         assert ref in titles, f"引用〈{ref}〉指不到任何條目"
+
+
+# --- 「大群在污染側」的成因：編號順序，不是不穩定 ---------------------------
+#
+# 協定第三節寫著成因是編號按大小遞減指派，而不是「大群比較容易不穩定」。
+# 兩句話都像成立，只有一句是量出來的——所以兩句都接回檔案。
+
+def _series(prefix: str):
+    c = pd.read_parquet(CLUSTERS)
+    d = c[c["group_id"].str.startswith(prefix)].copy()
+    d["序數"] = d["group_id"].str[1:].astype(int)
+    return d.sort_values("序數")
+
+
+def test_群編號按相異內容數遞減指派():
+    """這是「先跑 A001–A023 ＝ 先跑最大的 23 群」的全部根據。
+
+    哪天重新聚類換了編號規則，這個測試會失敗，而那時第三節的成因段落與
+    ENGINEERING_NOTES〈「取前 N 個」不是抽樣〉的案例都要重寫。
+    """
+    if not CLUSTERS.exists():
+        pytest.skip("clusters.parquet 不在本機")
+    a = _series("A")
+    assert list(a["相異內容數"]) == sorted(a["相異內容數"], reverse=True)
+    text = PROTOCOL.read_text(encoding="utf-8")
+    for prefix, floor in (("A", 0.99), ("B", 0.99)):
+        rho = _series(prefix)["序數"].corr(
+            _series(prefix)["相異內容數"], method="spearman")
+        assert rho < -floor
+        assert f"{rho:.3f}".lstrip("-") in text.replace("−", "-"), \
+            f"{prefix} 系列的 ρ={rho:.3f} 沒有出現在協定裡"
+
+
+def test_大小與判定穩定性分不出關係():
+    """協定寫的是「分不出來」，不是「反向」。
+
+    **這個測試要釘的正是那個克制。** 中位數 80 對 140 看起來很像結論，
+    而 p=0.160；若哪天 p 掉到顯著，協定那段就得改寫成一個真的結論——
+    改寫的時機是這裡失敗的時候。
+    """
+    frames, ids = _judgements()
+    if not CLUSTERS.exists():
+        pytest.skip("clusters.parquet 不在本機")
+    from scipy import stats
+    unstable = {g for g in ids
+                if len({frames[k].loc[g, "disposition"] for k in frames}) > 1}
+    c = pd.read_parquet(CLUSTERS).set_index("group_id").loc[ids]
+    u = c.loc[sorted(unstable), "相異內容數"]
+    s = c.loc[sorted(set(ids) - unstable), "相異內容數"]
+    assert u.median() < s.median()                  # 方向確實是反的
+    p = stats.mannwhitneyu(u, s, alternative="two-sided").pvalue
+    assert p > 0.05, "已經顯著了，協定第三節的「分不出來」要改寫"
+    text = PROTOCOL.read_text(encoding="utf-8")
+    assert f"中位 {u.median():.0f}" in text and f"中位 {s.median():.0f}" in text
+    assert f"p={p:.3f}" in text
+
+
+@pytest.mark.parametrize("col,side,label", [
+    ("相異內容數", "測試台", "測試台 23"),
+    ("相異內容數", "完全未判定", "完全未判定 118"),
+    ("請求數", "測試台", "測試台 23"),
+    ("請求數", "完全未判定", "完全未判定 118")])
+def test_協定記的最大群與實際相符(col, side, label):
+    """「大群」在兩種單位下答案不同——相異內容最大的群在乾淨側，
+    請求最大的群在污染側。**這個對比整段論證都靠它**，所以四格全釘。
+    """
+    sets = _group_sets()
+    c = pd.read_parquet(CLUSTERS).set_index("group_id")
+    sub = c.loc[sets[side], col]
+    gid, n = sub.idxmax(), int(sub.max())
+    body = _section("#### 驗證涵蓋率的限制")
+    rows = [ln for ln in body.splitlines() if ln.lstrip().startswith("| " + col + " |")]
+    assert len(rows) == 1, f"找不到「{col}」那一列"
+    assert f"`{gid}` {n:,}" in rows[0], f"{col}／{side} 應為 {gid} {n:,}：{rows[0]}"
+
+
+def test_協定第二節的污染範圍是整個測試台():
+    """一度寫成「驗證要用另外 16 群」——那 16 群同樣是導出材料。
+
+    **錯的方向是放寬**，而放寬的錯誤不會有徵兆：拿它們驗證會得到一個
+    比較好看的一致率，看起來像字典有效。
+    """
+    text = PROTOCOL.read_text(encoding="utf-8")
+    assert "適用於**全部 23 群**" in text
+    assert "驗證要用另外 16 群" not in text.replace("「驗證要用另外 16 群與尚未判定的 202 群」", "")
+    assert "完全未判定的 118 群是首選" in text
