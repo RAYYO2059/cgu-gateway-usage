@@ -284,3 +284,15 @@ def test_影響清單裡的不受影響項目仍然為零排除():
     man = _manifests()
     for k in ("2026-08-07", "2026-08-10", "2026-08-18", "2026-08-19"):
         assert man[k]["excluded_internal_prompts"] == 0, k
+
+
+def test_成本數字沒有被_shell_吃掉():
+    """本檔一度寫成 `US,749.32`——用未加引號的 heredoc 產生文件時，
+    bash 把 `$2` 當成位置參數展開成空字串。
+
+    釘住它是因為**這種壞法讀起來像打字漏字**，而它會出現在任何用
+    heredoc 寫檔的地方。金額後面的數字被吃掉，句子仍然通順。
+    """
+    doc = _doc()
+    assert "US$2,749.32" in doc
+    assert "US," not in doc
