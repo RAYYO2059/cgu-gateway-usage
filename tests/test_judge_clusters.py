@@ -2403,3 +2403,88 @@ def test_協定第二節的污染範圍是整個測試台():
     assert "適用於**全部 23 群**" in text
     assert "驗證要用另外 16 群" not in text.replace("「驗證要用另外 16 群與尚未判定的 202 群」", "")
     assert "完全未判定的 118 群是首選" in text
+
+
+# --- 可分類性上限：協定第一節記的數字要接回實際資料 ------------------------
+#
+# 這一項是「分類的對象是什麼」的界線，不是精度問題。它的數字全部手工填進
+# 協定，而其中一半來自 clean、一半來自 lite——**兩批不可互換的分母並排在
+# 同一節裡**，正是〈並排的數字要標明各自的算法〉的形狀。所以逐項釘住。
+
+HITS = REPO / "runs" / "2026-09-05T1700_prefilter" / "classify_lite" / "prefilter_hits.parquet"
+
+
+def _gap_section():
+    return _section("### 可分類母數 17,365 的可分類性上限")
+
+
+def test_lite_的_request_只有那八個鍵():
+    """缺的東西在上游就不在檔案裡，不是萃取端丟的。
+
+    這個測試釘的是 `extract_lite` 沒有做 role 挑選——哪天有人「補上」
+    system 的串接，協定那一段就要重寫，而重寫的時機是這裡失敗的時候。
+    """
+    src = (REPO / "src" / "extract_lite.py").read_text(encoding="utf-8")
+    assert 'prompt_text = _get(record, "request.prompt_text")' in src
+    for token in ("messages", "instructions", '"system"'):
+        assert token not in src, f"萃取端出現了 {token}，協定第一節要重寫"
+    text = _gap_section()
+    for key in ("conversation_id", "endpoint", "model_requested", "prompt_length",
+                "prompt_text", "provider", "stream", "thread_id"):
+        assert f"`{key}`" in text
+
+
+@pytest.mark.parametrize("K,requests,contents", [
+    (1, 42595, 7426),
+    (4, 41789, 6949),
+    (8, 40461, 6840)])
+def test_協定記的_token_下界與實際相符(K, requests, contents):
+    """**三個 K 都要驗。** 論證靠的是「K 從 1 到 8 幾乎不動」——
+
+    只釘 K=4 那一列的話，另外兩列可以被改成任意值而論證看起來還在。
+    """
+    if not HITS.exists():
+        pytest.skip("prefilter_hits.parquet 不在本機")
+    import pandas as _pd
+    from src.extract_lite import load_dataset
+    hits = _pd.read_parquet(HITS)
+    target = set(hits.loc[hits["rule"] == "需送分類器", "prompt_text_sha256"])
+    d = load_dataset()
+    d = d[d.prompt_text_sha256.isin(target) & d.prompt_text_len.notna()]
+    m = d.prompt_tokens.fillna(0) > K * d.prompt_text_len
+    assert int(m.sum()) == requests
+    assert int(d.loc[m, "prompt_text_sha256"].nunique()) == contents
+    text = _gap_section().replace("**", "")
+    row = [l for l in text.splitlines()
+           if l.lstrip().startswith(f"| {K} |")]
+    assert len(row) == 1, f"找不到 K={K} 那一列"
+    assert f"{requests:,}" in row[0] and f"{contents:,}" in row[0]
+
+
+def test_協定記的_clean_側比例與實際相符():
+    """clean 的 59.26% 是「這件事存在」的證據，不是 lite 的估計。
+
+    協定必須同時記數字**與不可轉移**這句話——只記數字的話，下一個人會
+    把它當成 lite 的比例用，而那個誤用不會有任何徵兆。
+    """
+    from src.schema import load_dataset as clean_ds
+    d = clean_ds()
+    ins = d.instructions_length.fillna(0) > 0
+    mem = d.memory_len.fillna(0) > 0
+    text = _gap_section().replace("**", "")
+    for n, pct in ((int(ins.sum()), 100 * ins.mean()),
+                   (int(mem.sum()), 100 * mem.mean()),
+                   (int((ins | mem).sum()), 100 * (ins | mem).mean())):
+        row = [l for l in text.splitlines()
+               if l.lstrip().startswith("|") and f"| {n:,} |" in l]
+        assert row, f"協定裡沒有 {n:,} 這一列"
+        assert f"{pct:.2f}%" in row[0], f"{n:,} 那列的佔比應為 {pct:.2f}%：{row[0]}"
+    assert "不可轉移到 lite" in text
+
+
+def test_協定第一節不記項數():
+    """手工維護的計數在本專案兩輪內錯過兩次。加一項就會再錯一次。"""
+    intro = _section("## 一、凍結座標").split("###", 1)[0]
+    import re
+    assert not re.search(r"這[一二三四五六七八九十]+項一旦變動", intro)
+    assert "不記數目" in intro
