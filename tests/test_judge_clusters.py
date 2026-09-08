@@ -2003,3 +2003,150 @@ def test_判定器不讀_label_dictionary():
     source = JUDGE.read_text(encoding="utf-8")
     assert "label_dictionary" not in source
     assert "FIELD_HELP" in jc.CARRIER.read_text(encoding="utf-8")
+
+
+# --- 現行方案（跑未判定的群，比分布）的前提也要被機械檢查 --------------------
+#
+# 協定第三節換了方案之後，多了一批手工維護的數字：三個集合的群數與涵蓋量、
+# `user`→`remove` 的基準。它們全部來自輸出檔與 `clusters.parquet`，
+# 所以全部接得回去。接不回去就是協定過期了——**改協定，不要改期望值**。
+
+SCREEN = JUDGE.parent / "prefix_screen.csv"
+CLUSTERS = JUDGE.parent / "clusters.parquet"
+
+
+def _group_sets():
+    """clean 群的三層切分：測試台 / 僅舊指紋判過 / 完全未判定。"""
+    need = [SCREEN, CLUSTERS] + list(OUTPUTS.values())
+    missing = [p.name for p in need if not p.exists()]
+    if missing:
+        pytest.skip(f"資料不在本機（缺 {', '.join(missing)}）")
+    screen = pd.read_csv(SCREEN)
+    clean = set(screen.loc[screen["personal_data"] == "clean", "group_id"])
+    old = set(pd.read_csv(OUTPUTS["79635e2b"])["group_id"])
+    bed = set(pd.read_csv(OUTPUTS["a0d19daa#1"])["group_id"])
+    return {
+        "測試台": sorted(bed),
+        "僅舊指紋": sorted(old - bed),
+        "完全未判定": sorted(clean - old - bed),
+        "clean": sorted(clean),
+    }
+
+
+@pytest.mark.parametrize("name,groups,contents,requests", [
+    ("測試台", 23, 4422, 20249),
+    ("僅舊指紋", 84, 1776, 4304),
+    ("完全未判定", 118, 5444, 7826),
+    ("clean", 225, 11642, 32379)])
+def test_協定記的群集切分與涵蓋量與實際檔案相符(name, groups, contents, requests):
+    """三個集合的群數、相異內容數、請求數。
+
+    **三個都要驗，不能只驗群數。** 協定用它們論證「只報群數會把一群兩萬筆
+    請求的結構當成一群五筆的同等份量」——那個論證靠的正是涵蓋量。
+    """
+    sets = _group_sets()
+    ids = sets[name]
+    assert len(ids) == groups
+    c = pd.read_parquet(CLUSTERS).set_index("group_id").loc[ids]
+    assert int(c["相異內容數"].sum()) == contents
+    assert int(c["請求數"].sum()) == requests
+    # 三個數字要出現在**同一列**上。分開找會近乎空真——「23」在這份檔裡
+    # 到處都是（`n=23`、`A001–A023`），單獨比對它等於沒比對。
+    text = PROTOCOL.read_text(encoding="utf-8")
+    wanted = [f"{n:,}" for n in (groups, contents, requests)]
+    hit = [ln for ln in text.splitlines()
+           if ln.lstrip().startswith("|") and all(w in ln for w in wanted)]
+    assert hit, f"協定裡沒有一列同時有 {wanted}"
+
+
+def test_協定沒有把_202_當成完全未判定():
+    """一度寫錯的那件事：「剩下 202 群」是以現行指紋為準的未判定數，
+    其中 84 群在舊指紋下已經判過。**「未判定」這個詞不帶指紋**，
+    而分母的定義隨指紋而變——所以協定必須明寫這兩層。
+    """
+    sets = _group_sets()
+    assert len(sets["僅舊指紋"]) + len(sets["完全未判定"]) == 202
+    assert len(sets["完全未判定"]) != 202          # 這就是錯誤的內容
+    text = PROTOCOL.read_text(encoding="utf-8")
+    assert "「202 群完全未判定」不成立" in text
+    assert "主結果用 118 群" in text
+
+
+@pytest.mark.parametrize("scope,user_n,remove_n", [
+    ("測試台69", 42, 4),
+    ("僅舊指紋84", 53, 0),
+    ("全部130", 80, 3)])
+def test_協定記的_user_remove_基準與實際輸出相符(scope, user_n, remove_n):
+    """預期方向是拿這三個數字寫定的。
+
+    **關鍵是 `僅舊指紋84` 那一列的 0。** 它讓「收斂到 0」變成不可證的方向，
+    也讓判準必須改寫成「超過 5.7%」。若哪天它不再是 0，預期方向就得重寫，
+    而重寫的時機是這個測試失敗的時候，不是有人剛好想起來的時候。
+    """
+    frames, ids = _judgements()
+    sets = _group_sets()
+    old = pd.read_csv(OUTPUTS["79635e2b"])
+    cur = pd.read_csv(OUTPUTS["a0d19daa#1"])
+    if scope == "測試台69":
+        rows = pd.concat([frames[k].loc[ids].reset_index() for k in frames])
+    elif scope == "僅舊指紋84":
+        rows = old[old["group_id"].isin(sets["僅舊指紋"])]
+    else:
+        rows = pd.concat([old, cur])
+    user = rows[rows["frame_owner"] == "user"]
+    assert len(user) == user_n
+    assert int((user["disposition"] == "remove").sum()) == remove_n
+
+
+def test_三法則的判準與基準樣本數相符():
+    """0/53 的 95% 上界是 3/53 = 5.7%。n 變了門檻就變，而協定裡是寫死的。"""
+    sets = _group_sets()
+    old = pd.read_csv(OUTPUTS["79635e2b"])
+    n = int((old[old["group_id"].isin(sets["僅舊指紋"])]["frame_owner"] == "user").sum())
+    # 去掉 markdown 的粗體標記再比——強調記號會插在數字中間，
+    # 而「協定裡有沒有這個數字」跟它有沒有被加粗無關。
+    text = PROTOCOL.read_text(encoding="utf-8").replace("**", "")
+    assert f"0/{n}" in text
+    assert f"3/{n} = {300 / n:.1f}%" in text
+
+
+def test_協定對_frame_owner_兩欄相同的解釋成立():
+    """兩欄相同的機制是「三次不穩的那些群，在成對比較的那兩批之間就已經
+    不同」——**不是「異值都落在同一批」**。後者是本檔一度寫過的說法，
+    而它是錯的：A017 的異值在 `a0d19daa#1`，A019 的在 `#2`。
+
+    這個測試釘的是解釋，不是數字。解釋錯了數字照樣對得上，所以它不會被
+    `test_協定記的基準一致率與實際輸出相符` 抓到。
+    """
+    from collections import Counter
+    frames, ids = _judgements()
+    three = {g for g in ids
+             if len({frames[k].loc[g, "frame_owner"] for k in frames}) > 1}
+    pair = {g for g in ids
+            if frames["a0d19daa#1"].loc[g, "frame_owner"]
+            != frames["a0d19daa#2"].loc[g, "frame_owner"]}
+    assert three == pair, "兩欄相同的機制不成立了，協定的解釋要重寫"
+    odd = {}
+    for g in three:
+        vals = {k: frames[k].loc[g, "frame_owner"] for k in frames}
+        seen = Counter(vals.values())
+        odd[g] = next(k for k, v in vals.items() if seen[v] == 1)
+    assert len(set(odd.values())) > 1, f"異值批次 {odd}"
+    text = PROTOCOL.read_text(encoding="utf-8")
+    assert "不是「異值都落在同一批」" in text
+
+
+def test_作廢的方案連同理由留在協定裡():
+    """預先寫定的規則若可以被安靜換掉，它就不再是預先寫定的。
+
+    2026-09-07 的 23 群測試台方案已作廢，但四條作廢理由與原方案都要留著
+    ——留著才看得出換過，也才看得出換的理由不是事後配合結果編的。
+    """
+    text = PROTOCOL.read_text(encoding="utf-8")
+    assert "作廢的方案：23 群測試台重跑量一致率" in text
+    assert "2026-09-07 初版" in text and "2026-09-08 改版" in text
+    for marker in ("**(a) 判定器看不到字典。**",
+                   "**(b) 要讓判定器看到就得改 `FIELD_HELP`",
+                   "**(c) 跨指紋的雜訊剛好等於判讀門檻。**",
+                   "**(d) 那 23 群本來就不可用於驗證。**"):
+        assert marker in text, marker
