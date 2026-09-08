@@ -2488,3 +2488,87 @@ def test_協定第一節不記項數():
     import re
     assert not re.search(r"這[一二三四五六七八九十]+項一旦變動", intro)
     assert "不記數目" in intro
+
+
+# --- 字典與 FIELD_HELP 的同步 -----------------------------------------------
+#
+# **本檔最重要的一組測試。** 兩邊漂掉不會報錯：判定器照樣跑、文件照樣讀得懂，
+# 只是判定器用的是舊值域、文件寫的是新值域。而輸出檔上看不出任何差別——
+# `prompt_sha256` 只證明「那一次用的是這個 FIELD_HELP」，不證明它與字典一致。
+#
+# 字典分兩層（見 `ref/label_dictionary.csv` 的〈層別說明〉）：
+#   分類法    給人標註內容用的最終標籤，判定器看不到
+#   分流判準  給判定器判群集去留用的，必須與 FIELD_HELP 逐字相同
+
+DICT_CSV = REPO / "ref" / "label_dictionary.csv"
+
+
+def _dict_rows():
+    import csv as _csv
+    return list(_csv.DictReader(DICT_CSV.read_text(encoding="utf-8-sig").splitlines()))
+
+
+def _triage_rows():
+    rows = [r for r in _dict_rows() if r["層"] == "分流判準"]
+    # **空真的防線。** 沒有分流判準列時，下面每一個「逐項相同」都會自動成立。
+    # 這一行讓「字典裡忘了寫」與「字典寫對了」分得開。
+    assert rows, "字典裡沒有任何『分流判準』列——同步測試會變成空真"
+    return rows
+
+
+def test_字典的層欄只有三種值而且說明列在最前面():
+    rows = _dict_rows()
+    assert {r["層"] for r in rows} == {"（層別說明）", "分類法", "分流判準"}
+    assert [r["層"] for r in rows[:2]] == ["（層別說明）", "（層別說明）"]
+    assert {r["軸"] for r in rows[:2]} == {"分類法", "分流判準"}
+    # 說明列要講出兩層的分別，不只是列出軸名
+    text = " ".join(r["一句話定義"] + r["邊界說明"] for r in rows[:2])
+    assert "判定器看不到" in text and "FIELD_HELP" in text
+
+
+def test_分類法那一層還是原本四個軸():
+    """加了分流判準之後，內容分類的軸不該被動到。"""
+    axes = {r["軸"] for r in _dict_rows() if r["層"] == "分類法"}
+    assert axes == {"invocation", "role", "domain", "status"}
+
+
+def test_分流判準的軸與_FIELD_HELP_相同():
+    carrier = jc._load_carrier()
+    assert {r["軸"] for r in _triage_rows()} == set(carrier.FIELDS)
+
+
+@pytest.mark.parametrize("axis", ["frame_owner", "disposition", "axis_level"])
+def test_分流判準的值域與_FIELD_HELP_逐項相同(axis):
+    """**順序也要相同。** FIELD_HELP 是 dict，順序會進 `render_axes()`，
+    因而進指紋；字典裡順序不同的話，讀字典的人看到的優先順序與模型看到的
+    不一樣，而那個差別不會出現在任何輸出上。"""
+    carrier = jc._load_carrier()
+    assert axis in carrier.FIELD_HELP, f"FIELD_HELP 沒有 {axis}"
+    got = [r["代碼"] for r in _triage_rows() if r["軸"] == axis]
+    assert got == list(carrier.FIELD_HELP[axis]), f"{axis} 值域或順序不一致"
+
+
+@pytest.mark.parametrize("axis", ["frame_owner", "disposition", "axis_level"])
+def test_分流判準的定義文字與_FIELD_HELP_逐字相同(axis):
+    """只比值域不夠：值域相同而定義漂掉，判定器與文件說的是兩件事，
+    而一致率、分布、指紋全都照樣算得出來。"""
+    carrier = jc._load_carrier()
+    got = {r["代碼"]: r["一句話定義"] for r in _triage_rows() if r["軸"] == axis}
+    assert got == dict(carrier.FIELD_HELP[axis]), f"{axis} 的定義文字不一致"
+
+
+def test_同步測試抓得到單邊修改():
+    """**突變測試內建。** 這組測試的價值全在「漂掉時會紅」，
+
+    而那件事沒有正面證據——測試綠著的時候，看不出它是在保護什麼。
+    這裡就地造一個漂掉的 FIELD_HELP，確認比對真的會失敗。
+    """
+    carrier = jc._load_carrier()
+    drifted = {ax: dict(v) for ax, v in carrier.FIELD_HELP.items()}
+    ax = "disposition"
+    code = next(iter(drifted[ax]))
+    drifted[ax][code] += "（單邊改了一個字）"
+    got = {r["代碼"]: r["一句話定義"] for r in _triage_rows() if r["軸"] == ax}
+    assert got != dict(drifted[ax])
+    dropped = {k: v for k, v in drifted[ax].items() if k != code}
+    assert list(got) != list(dropped)
