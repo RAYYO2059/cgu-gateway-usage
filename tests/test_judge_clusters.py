@@ -2150,3 +2150,165 @@ def test_作廢的方案連同理由留在協定裡():
                    "**(c) 跨指紋的雜訊剛好等於判讀門檻。**",
                    "**(d) 那 23 群本來就不可用於驗證。**"):
         assert marker in text, marker
+
+
+# --- 驗證涵蓋率：三組分母，同一列上要全部對得起來 --------------------------
+#
+# 協定第三節〈驗證涵蓋率的限制〉整段論證靠的是「請求量集中在已污染的 23 群」。
+# 那是五個數字撐起來的一列，改壞其中一個不會有任何徵兆——所以整列一起釘。
+
+def _section(heading: str) -> str:
+    """協定裡某一節的內文（到下一個同級或更高級標題為止），去掉粗體標記。
+
+    列名在不同的表裡會重複，所以比對必須限節——不限節的比對會抓到別張表
+    的同名列，而那張表的數字是另一件事。
+    """
+    text = PROTOCOL.read_text(encoding="utf-8").replace("**", "")
+    lines = text.splitlines()
+    i = next(k for k, l in enumerate(lines) if l.startswith(heading))
+    level = len(heading) - len(heading.lstrip("#"))
+    out = []
+    for line in lines[i + 1:]:
+        if line.startswith("#") and len(line) - len(line.lstrip("#")) <= level:
+            break
+        out.append(line)
+    return "\n".join(out)
+
+
+FROZEN_CONTENTS = 17365          # 分類母數，第一節〈基準線〉凍結
+FROZEN_REQUESTS = 58100
+
+
+def test_協定第一節的分類母數還是凍結的那組():
+    """下面的涵蓋率用它當分母。它變了，涵蓋率整張表都要重算。"""
+    text = PROTOCOL.read_text(encoding="utf-8")
+    assert f"（{FROZEN_CONTENTS:,} 個相異內容 / {FROZEN_REQUESTS:,} 筆請求）" in text
+
+
+@pytest.mark.parametrize("name,label", [
+    ("測試台", "測試台 23（已污染）"),
+    ("僅舊指紋", "僅舊指紋 84"),
+    ("完全未判定", "完全未判定 118"),
+    ("clean", "clean 225 合計")])
+def test_協定記的驗證涵蓋率與實際檔案相符(name, label):
+    """相異內容、佔母數、請求、佔母數、佔 clean——**五格同列一起驗**。
+
+    分開驗每一格會近乎空真：百分比只有三個字元，`24.2%` 這種字串在別處
+    也可能出現。而這一列的意義正在於五格互相對得起來——
+    「7,826 筆佔 clean 的 24.2%、佔分類母數只有 13.5%」是同一件事的兩種
+    講法，其中一個改了另一個沒改，論證就變成假的而表格看起來還是整齊的。
+    """
+    sets = _group_sets()
+    c = pd.read_parquet(CLUSTERS).set_index("group_id")
+    ids = sets[name]
+    contents = int(c.loc[ids, "相異內容數"].sum())
+    requests = int(c.loc[ids, "請求數"].sum())
+    clean_requests = int(c.loc[sets["clean"], "請求數"].sum())
+    cells = [
+        f"{contents:,}",
+        f"{100 * contents / FROZEN_CONTENTS:.1f}%",
+        f"{requests:,}",
+        f"{100 * requests / FROZEN_REQUESTS:.1f}%",
+        "100%" if name == "clean" else f"{100 * requests / clean_requests:.1f}%",
+    ]
+    # **只在〈驗證涵蓋率的限制〉那一節裡找。** 「完全未判定 118」這個列名
+    # 在代價表裡也有一列，兩張表講的是不同的東西——第一版沒有限節，
+    # 測試當場撞上這件事，那正是〈並排的數字要標明各自的算法〉的形狀。
+    row = [ln for ln in _section("#### 驗證涵蓋率的限制").splitlines()
+           if ln.lstrip().startswith("| " + label + " |")]
+    assert len(row) == 1, f"找不到（或不只一列）「{label}」"
+    for cell in cells:
+        assert f"| {cell} " in row[0] or f"| {cell} |" in row[0], \
+            f"{label} 這一列少了 {cell}：{row[0]}"
+
+
+def test_涵蓋率的三個集合相加等於_clean():
+    """表格自己要加得起來。CLAUDE.md 記著一次「清單加起來是 24 而數字寫
+    23，兩個都對不上卻因為沒有人相加而存活下來」——這裡把相加自動化。
+    """
+    sets = _group_sets()
+    c = pd.read_parquet(CLUSTERS).set_index("group_id")
+    parts = ["測試台", "僅舊指紋", "完全未判定"]
+    for col in ("相異內容數", "請求數"):
+        assert sum(int(c.loc[sets[k], col].sum()) for k in parts) \
+            == int(c.loc[sets["clean"], col].sum())
+
+
+def test_協定明寫大群在污染側():
+    """限制的成因是「大群幾乎全在污染側」，不是「n 不夠」。
+
+    這個判斷會隨資料改變，所以要接回檔案：clean 前三大群若哪天不再全部
+    落在測試台裡，那段論證就得重寫。
+    """
+    sets = _group_sets()
+    c = pd.read_parquet(CLUSTERS).set_index("group_id")
+    top3 = list(c.loc[sets["clean"]].nlargest(3, "請求數").index)
+    assert set(top3) <= set(sets["測試台"]), f"前三大群 {top3} 不再全在測試台"
+    biggest_clean = c.loc[sets["完全未判定"], "請求數"].idxmax()
+    # **群編號與筆數要同句。** 只找編號會抓到第一節的群集清單
+    # （`A001`–`A123` 那一行），那跟「它是不是最大的群」無關——
+    # 第一版就是這樣讓一個突變逃掉的。
+    import re
+    body = _section("#### 驗證涵蓋率的限制")
+    for g in top3 + [biggest_clean]:
+        n = int(c.loc[g, "請求數"])
+        # 提到這個群、而且句子裡有千分位數字的每一行，都要帶對的筆數。
+        # **不能只要求「有一行對」**：同一個群在這一節裡出現兩次，
+        # 只驗一行的話改壞其中一處不會被發現（第一版就漏掉了這個突變）。
+        lines = [ln for ln in body.splitlines()
+                 if f"`{g}`" in ln and re.search(r"\d,\d{3}", ln)]
+        assert lines, f"協定的涵蓋率一節裡沒有「{g} 帶著筆數」"
+        for ln in lines:
+            assert f"{n:,}" in ln, f"{g} 應為 {n:,}：{ln.strip()}"
+
+
+def test_公開版與完整案例互相標註():
+    """假訊號那條拆成兩份：公開版沒有案例，案例在不公開的那份。
+
+    **拆開之後最容易斷的是指路。** 兩邊各自都讀得通，所以少了指路不會有
+    任何徵兆——只會讓公開版看起來像一條沒有根據的斷言。
+    """
+    notes = REPO / "docs" / "ENGINEERING_NOTES.md"
+    text = notes.read_text(encoding="utf-8")
+    assert "## 重複次數可能編碼的是位置，不是性質" in text
+    assert "CLASSIFICATION_NOTES.md" in text
+    assert "本條沒有附案例" in text
+    private = REPO / "docs" / "CLASSIFICATION_NOTES.md"
+    if not private.exists():
+        pytest.skip("完整案例不在本機（不進版控）")
+    assert "〈重複次數可能編碼的是位置，不是性質〉" in \
+        private.read_text(encoding="utf-8")
+
+
+def test_工程筆記的條目都在某個分節底下():
+    """條目移動之後最容易出的錯是掉在分節之外（或黏在錯的分節尾巴）。
+
+    本檔沒有條號，所有交叉引用都用標題——所以移動不會斷引用，
+    但會讓條目落在語意不對的分節底下，而那不會有任何徵兆。
+    """
+    notes = REPO / "docs" / "ENGINEERING_NOTES.md"
+    group, placement = None, {}
+    for line in notes.read_text(encoding="utf-8").splitlines():
+        if line.startswith("# ") and not line.startswith("## "):
+            group = line[2:].strip()
+        elif line.startswith("## "):
+            placement[line[3:].strip()] = group
+    assert placement["差小於量測解析度時，不要從方向讀出結論"] == "計數與聚合"
+    assert placement["重複次數可能編碼的是位置，不是性質"] == "計數與聚合"
+    assert placement["兩個消費者共用一個可變物件時，重新綁定只會更新其中一個"] \
+        == "沉默的失效"
+    assert placement["明文邊界要涵蓋例外訊息"] == "辨識與去識別"
+    assert placement["並排的數字要標明各自的算法"] == "紀錄與可重現"
+    assert "工程筆記" not in placement.values()          # 沒有條目落在檔頭底下
+
+
+def test_工程筆記的交叉引用都指得到():
+    """引用用的是標題，所以改標題就會斷——而斷了不會有任何徵兆。"""
+    import re
+    notes = REPO / "docs" / "ENGINEERING_NOTES.md"
+    text = notes.read_text(encoding="utf-8")
+    titles = {ln[3:].strip() for ln in text.splitlines() if ln.startswith("## ")}
+    # 〈…〉裡的引用；跨行的用去掉換行與縮排之後再比
+    flat = re.sub(r"\n\s*", "", text)
+    for ref in re.findall(r"見〈(.+?)〉", flat):
+        assert ref in titles, f"引用〈{ref}〉指不到任何條目"
