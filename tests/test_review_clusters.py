@@ -505,3 +505,84 @@ def test_載具只讀這五個檔():
              if "HERE /" in l and "=" in l]
     assert set(paths) == {"CLUSTERS", "MEMBERS", "PREFIXES",
                           "REVIEW_CSV", "SCREEN_CSV"}
+
+
+# --- 檢視模式（--inspect）：只顯示，不問不寫 --------------------------------
+#
+# 這個模式存在的理由是**紀錄檔的純度**：看過 LLM 判定的那幾群，其人工判定
+# 已經不是獨立參照；若用審閱模式看，那幾列會混進 cluster_review.csv 而事後
+# 分不出來。所以它的核心性質只有一條——**不寫任何檔案**——而那條要用測試釘住，
+# 因為它是「沒有做某件事」，沒有任何輸出可以顯示它成立。
+
+@pytest.mark.parametrize("spec,expect", [
+    ("A008,A010,A018", ["A008", "A010", "A018"]),
+    (" a008 , a010 ", ["A008", "A010"]),          # 去空白、轉大寫
+    ("A008,A008,A010", ["A008", "A010"]),         # 去重
+    ("A018,A008", ["A018", "A008"]),              # **順序照給的來，不重排**
+])
+def test_inspect_的群清單解析(spec, expect):
+    assert rc.parse_inspect(spec) == expect
+
+
+@pytest.mark.parametrize("spec", ["", "   ", ",,,"])
+def test_inspect_空清單被擋下(spec):
+    with pytest.raises(SystemExit):
+        rc.parse_inspect(spec)
+
+
+def test_inspect_不重排成先易後難():
+    """`pending_groups()` 的排序是為了建立常態感，那是審閱的需求。
+
+    檢視的需求相反：回答同一個問題的群要連著看。兩個排序都對，但套錯了
+    不會有徵兆——螢幕上只是換了個順序。
+    """
+    given = "A017,A019,A008"
+    assert rc.parse_inspect(given) == ["A017", "A019", "A008"]
+
+
+def test_inspect_沒有任何寫檔路徑():
+    """**這是這個模式唯一真正的性質。**
+
+    用原始碼比對而不是跑一遍：跑一遍要有明文才跑得動，而測試不碰明文。
+    """
+    import ast
+    source = CARRIER.read_text(encoding="utf-8")
+    fn = next(n for n in ast.parse(source).body
+              if isinstance(n, ast.FunctionDef) and n.name == "run_inspect")
+    # **把 docstring 拿掉再比。** docstring 裡正寫著「不呼叫 append_review()、
+    # 不碰 REVIEW_CSV」——說明自己會讓比對命中，第一版就是這樣紅的。
+    stmts = fn.body[1:] if (fn.body and isinstance(fn.body[0], ast.Expr)
+                            and isinstance(fn.body[0].value, ast.Constant)) else fn.body
+    code = "\n".join(ast.unparse(s) for s in stmts)
+    for token in ("append_review", "REVIEW_CSV.open", "open(", "to_csv",
+                  "write_text", "SCREEN_CSV"):
+        assert token not in code, f"run_inspect 碰到了寫檔相關的 {token}"
+    # REVIEW_CSV 只准出現在提示文字裡（.name），不准被開啟或寫入
+    assert "REVIEW_CSV.name" in code
+
+
+def test_審閱模式沒有挑群的參數():
+    """**刻意缺席的東西也要釘。**
+
+    一個能挑群的記錄模式，就是 --inspect 要避開的那個危險本身：
+    它讓人可以只記錄自己挑的那幾群，而挑的依據無從查證。
+    缺席不會有任何徵兆，所以由測試代替記憶。
+    """
+    source = CARRIER.read_text(encoding="utf-8")
+    args = [l for l in source.splitlines() if "add_argument(" in l]
+    assert len(args) == 2, args
+    flags = source.split("def main(", 1)[1]
+    assert '"--only"' not in flags
+    assert '"--groups"' not in flags
+
+
+def test_inspect_與_screen_互斥():
+    """一個判風險、一個看內容，心態相反（見檔頭〈兩個模式的關係〉）。"""
+    with pytest.raises(SystemExit):
+        rc.main(["--screen", "--inspect", "A008"])
+
+
+def test_inspect_模式在旗標清單裡有說明():
+    source = CARRIER.read_text(encoding="utf-8")
+    assert "--inspect A008,A010" in source          # 檔頭的用法列
+    assert "不問三軸、不寫任何檔案" in source
