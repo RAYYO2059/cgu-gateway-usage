@@ -1729,17 +1729,24 @@ def test_output_不影響指紋():
 
 
 CURRENT_FINGERPRINT = (
-    "240ffe175a40866f39386f7f7d3a179344447eff40d22b6861dfdb0f0a9e95c5")
+    "a2dc7b114624c15ed0f36659e035b75e91d90ef1b5c8b106eb43ae7fd5c678a0")
 """現行指紋。**改動它要跟全量重跑一起做，不是改個數字讓測試變綠。**
 
 沿革（每一次都要寫明換的理由，否則下一個人分不出「有意的」與「改綠的」）：
 
 - `79635e2b…`  107 群那一批
 - `a0d19daab…` 探針問法改寬；測試台 A001–A023 判了兩次
-- `240ffe175…` **本次**：disposition 值域從 remove／keep／split 改成
-  tool_injected／batch_project／service_relay／user_envelope／insufficient，
-  frame_owner 的 tool／user 改用散布度定義。
+- `240ffe175…` （commit e45b500，2026-09-08 20:05:01）disposition 值域從
+  remove／keep／split 改成 tool_injected／batch_project／service_relay／
+  user_envelope／insufficient，frame_owner 的 tool／user 改用散布度定義。
   **既有 130 筆判定的 disposition 值不在新值域裡，不可與新結果並排。**
+- `a2dc7b114…` **本次**：axis_level 值域從 all_three／invocation_only／none
+  改成 all_three／invocation_only／not_attributable／insufficient_data／none。
+  拆出 `not_attributable`（意圖不屬於本 gateway 使用者，對應 service_relay）
+  與 `insufficient_data`（材料被上游拿掉，對應 insufficient），
+  `none` 收窄成「判不出來而且不知道為什麼」；`invocation_only` 的定義文字
+  補上「role/domain 需抽樣」。**`240ffe17` 下判定了 0 筆，所以這次換指紋
+  沒有作廢任何既有判定。**
 
 釘在測試裡的理由：指紋在每一列輸出上都有，但沒有東西在讀它——
 `stale_fingerprints` 只在同一個檔案內比對，跨檔、跨次執行沒有人看。
@@ -2320,6 +2327,7 @@ def test_工程筆記的條目都在某個分節底下():
         == "沉默的失效"
     assert placement["明文邊界要涵蓋例外訊息"] == "辨識與去識別"
     assert placement["並排的數字要標明各自的算法"] == "紀錄與可重現"
+    assert placement["相對指涉在寫的當下明確，在讀的當下不明確"] == "紀錄與可重現"
     assert "工程筆記" not in placement.values()          # 沒有條目落在檔頭底下
 
 
@@ -2331,8 +2339,47 @@ def test_工程筆記的交叉引用都指得到():
     titles = {ln[3:].strip() for ln in text.splitlines() if ln.startswith("## ")}
     # 〈…〉裡的引用；跨行的用去掉換行與縮排之後再比
     flat = re.sub(r"\n\s*", "", text)
-    for ref in re.findall(r"見〈(.+?)〉", flat):
+    refs = (re.findall(r"見〈(.+?)〉", flat)
+            + re.findall(r"同族\**：\s*〈(.+?)〉", flat))
+    assert refs, "一個引用都抓不到——正規式壞了，這條會變成空真"
+    for ref in refs:
         assert ref in titles, f"引用〈{ref}〉指不到任何條目"
+
+
+def _note_body(title: str) -> str:
+    """某一條的本文，去掉換行與縮排（引用會跨行）。"""
+    import re as _re
+    text = (REPO / "docs" / "ENGINEERING_NOTES.md").read_text(encoding="utf-8")
+    hit = [b for b in text.split("\n## ") if b.startswith(title)]
+    assert len(hit) == 1, f"找不到（或找到多條）〈{title}〉"
+    return _re.sub(r"\n\s*", "", hit[0].split("\n# ")[0])
+
+
+def test_同族的兩條互相指得到():
+    """**互指最容易斷的是回指那一邊。** 新條目寫「同族：舊條目」是自然的
+    動作，舊條目補一句指回新條目不是——而少了它，從舊條目那邊讀不出這是
+    一組，只會讀成一條孤立的規則。兩邊各驗一次。
+    """
+    甲 = "並排的數字要標明各自的算法"
+    乙 = "相對指涉在寫的當下明確，在讀的當下不明確"
+    assert f"〈{乙}〉" in _note_body(甲), "舊條目沒有指回新條目"
+    assert f"〈{甲}〉" in _note_body(乙), "新條目沒有指到舊條目"
+
+
+def test_相對指涉那條寫出了絕對座標要帶什麼():
+    """規則要可執行。「不要用相對指涉」是禁止，不是做法——少了「改用什麼」
+    那一半，讀的人只能自己發明一個，而發明出來的多半又是相對的。
+    """
+    entry = _note_body("相對指涉在寫的當下明確，在讀的當下不明確")
+    for token in ("commit hash", "時間戳", "指紋值"):
+        assert token in entry, token
+    # 被禁止的講法要逐個列出來，否則只會被讀成「少用一點」
+    for token in ("上一輪", "剛才", "前一次"):
+        assert token in entry, token
+    # 成因（執行單位 ≠ 指令單位）不可省，那是這條唯一難想到的部分
+    assert "一次指令可能產生多個 commit" in entry
+    # 「沒有變更」的回報也適用——這是最容易漏的一半
+    assert "維持原狀" in entry
 
 
 # --- 「大群在污染側」的成因：編號順序，不是不穩定 ---------------------------
@@ -2588,3 +2635,200 @@ def test_同步測試抓得到單邊修改():
     assert got != dict(drifted[ax])
     dropped = {k: v for k, v in drifted[ax].items() if k != code}
     assert list(got) != list(dropped)
+
+
+# --- axis_level 新值域（2026-09-09，指紋 a2dc7b11…）--------------------------
+#
+# **這一組釘的是「值域改了但兩邊一起改」也要被看見。** 同步測試只保證
+# 字典與 FIELD_HELP 一致；兩邊同時改成別的東西，同步測試照樣全綠。
+
+AXIS_LEVEL_VALUES = ("all_three", "invocation_only", "not_attributable",
+                     "insufficient_data", "none", "unsure")
+
+
+def test_axis_level_的值域是五個分類值加一個棄權值():
+    """**不要報成「六個值」。** `unsure` 與其他值不同層——那些是分類，
+    這是棄權。把它算進分類值的數目，等於把棄權當成一種判定結果。"""
+    carrier = jc._load_carrier()
+    got = tuple(carrier.FIELDS["axis_level"])
+    assert got == AXIS_LEVEL_VALUES
+    分類值 = [v for v in got if v != "unsure"]
+    assert len(分類值) == 5
+    assert got[-1] == "unsure", "棄權值要排在最後，順序會進指紋"
+
+
+def test_三軸的棄權值都是_unsure_而且只有一個():
+    carrier = jc._load_carrier()
+    for axis, values in carrier.FIELDS.items():
+        assert values.count("unsure") == 1, axis
+        assert values[-1] == "unsure", axis
+
+
+@pytest.mark.parametrize("axis", ["frame_owner", "disposition", "axis_level"])
+def test_同步測試抓得到單邊修改_逐軸(axis):
+    """`test_同步測試抓得到單邊修改` 只突變 disposition。值域改版之後，
+    新加的值若沒有被同一道保護涵蓋，漂掉時仍然會全綠——所以三軸各驗一次。
+
+    對每個軸都挑**最後一個實質值**來突變，而不是第一個：新值通常加在
+    中間或尾端，只突變第一個等於永遠在驗舊值。
+    """
+    carrier = jc._load_carrier()
+    codes = [c for c in carrier.FIELD_HELP[axis] if c != "unsure"]
+    victim = codes[-1]
+    got = {r["代碼"]: r["一句話定義"] for r in _triage_rows() if r["軸"] == axis}
+    drifted = dict(carrier.FIELD_HELP[axis])
+    drifted[victim] += "（單邊改了一個字）"
+    assert got != drifted, f"{axis}/{victim} 漂掉時比對仍然成立——保護是空的"
+    dropped = {k: v for k, v in carrier.FIELD_HELP[axis].items() if k != victim}
+    assert list(got) != list(dropped), f"{axis}/{victim} 被刪掉時值域比對仍然成立"
+
+
+def test_三個判不出來的值把不可互相取代的理由寫死在字典裡():
+    """`not_attributable`／`insufficient_data`／`none` 三者都是「群層判不出
+    三軸」，但成因不同、處置不同、分母不同。合併會讓 `none` 的佔比混入
+    非分類問題——而那個佔比正是要報的「分類器能力上限」。
+
+    比照 `status` 的 `not_applicable` 那條的寫法：理由寫在檔案裡，
+    不是寫在對話裡。
+    """
+    rows = {r["代碼"]: r for r in _triage_rows() if r["軸"] == "axis_level"}
+    assert set(rows) == set(AXIS_LEVEL_VALUES)
+
+    # 每一個都要指出它對應哪一個 disposition，否則共現檢查無從對起
+    assert "service_relay" in rows["not_attributable"]["邊界說明"]
+    assert "insufficient" in rows["insufficient_data"]["邊界說明"]
+
+    # 成因要寫出來，不能只寫「不同」
+    assert "不使用本 gateway 的第三方" in rows["not_attributable"]["邊界說明"]
+    assert "上游 schema" in rows["insufficient_data"]["邊界說明"]
+
+    # 「不可互相取代」要三個值都講到，且要出現在同一格裡——
+    # 拆成三格各講一句的話，讀任何一格都看不出三者的關係
+    for code in ("not_attributable", "insufficient_data", "none"):
+        note = rows[code]["邊界說明"]
+        assert "三者不可互相取代" in note, code
+        assert all(v in note for v in
+                   ("not_attributable", "insufficient_data", "none")), code
+
+    # none 是訊號不是預設值，而且要把不確定的案例導向 unsure
+    assert "不是一個安全的預設值" in rows["none"]["邊界說明"]
+    assert "unsure" in rows["none"]["邊界說明"]
+
+    # 殘留撞號要留在檔案裡，不是留在對話裡
+    assert "tool_injected" in rows["none"]["邊界說明"]
+
+
+def test_棄權值的保留理由寫在字典裡():
+    """移除 `unsure` 會讓模型被迫在分類值裡挑一個，而挑出來的那個
+    在輸出檔上與有把握的判定**長得一模一樣**。理由要寫死，否則下一個
+    看到「有一個值幾乎沒人用」的人會把它刪掉。"""
+    rows = [r for r in _triage_rows() if r["代碼"] == "unsure"]
+    assert len(rows) == 3, "三個軸各要有一列 unsure"
+    for r in rows:
+        note = r["邊界說明"]
+        assert "棄權" in note, r["軸"]
+        assert "被迫" in note, r["軸"]
+        # 值域大小的講法要分開寫，不可寫成「N 個值」
+        assert "個分類值 + 一個棄權值" in note, r["軸"]
+        # 同步契約：這一格必須與 FIELD_HELP 的 "" 相同
+        assert r["一句話定義"] == "", r["軸"]
+# --- 協定第三節：兩軸的共現檢查 ---------------------------------------------
+#
+# **這一節是驗收條件，不是測試。** 這裡的測試只保證條件本身寫得完整、
+# 而且接得回字典——真正的檢查要等 118 群跑完才做得了。
+#
+# 會壞而沒有徵兆的地方有三個：門檻寫成單向、n 的下限漏掉、
+# 兩軸對應的值在字典改名之後沒有跟著改。
+
+COOCCUR = "### 兩軸的共現檢查（118 群跑完之後的驗收條件）"
+
+
+def _cooccur_section() -> str:
+    text = PROTOCOL.read_text(encoding="utf-8")
+    assert text.count(COOCCUR) == 1, "共現檢查那一節不見了或重複"
+    return text.split(COOCCUR)[1].split("\n### ")[0]
+
+
+def test_共現檢查的兩對值都接得回字典():
+    """**協定寫的值名要與字典逐字相同。** 字典改名而協定沒改，
+    驗收時會拿一個不存在的值去查，查出來永遠是 0 群——而 0 群看起來
+    像「這一格沒人用」，不像「名字錯了」。
+    """
+    sec = _cooccur_section()
+    carrier = jc._load_carrier()
+    for dispo, level in (("insufficient", "insufficient_data"),
+                         ("service_relay", "not_attributable")):
+        assert dispo in carrier.FIELDS["disposition"], dispo
+        assert level in carrier.FIELDS["axis_level"], level
+        assert dispo in sec and level in sec, (dispo, level)
+
+
+def test_共現檢查兩個方向都寫了而且標明分母不同():
+    """只報一個方向會把另一個方向的錯誤蓋掉：召回高而精確低，
+    代表 disposition 那一格在濫用實質分類，但召回那個數字看起來很好。
+
+    兩個方向的分母不同，所以兩個百分比不得並排而不標明——
+    見〈並排的數字要標明各自的算法〉。
+    """
+    sec = _cooccur_section()
+    assert "P(axis_level = X | disposition = Y)" in sec
+    assert "P(disposition = Y | axis_level = X)" in sec
+    assert "分母不同" in sec
+    assert "並排的數字要標明各自的算法" in sec
+
+
+def test_共現檢查有_n_的下限而且下限講的是解析度():
+    """**門檻沒有 n 的下限就是空的。** n=5 時一群 = 20pp，
+    任何百分比門檻在那裡都讀不出來，而百分比照樣算得出來。
+    """
+    sec = _cooccur_section()
+    assert "< 10" in sec, "n 的下限不見了"
+    assert "不算百分比" in sec and "原始計數" in sec
+    assert "差小於量測解析度時，不要從方向讀出結論" in sec
+
+
+def test_共現檢查的門檻標明是建議值且寫在跑之前():
+    """門檻是預先登記的。**跑完再挑一個剛好通過的數字，等於用結果定義通過。**
+    值域與門檻由對話端裁定，這裡只驗「標明了待裁定」與「標明了寫在跑之前」。
+    """
+    sec = _cooccur_section()
+    assert "建議值" in sec and "待裁定" in sec
+    assert "寫定於重跑之前" in sec
+    # 三段門檻都要有數字，否則「建議」等於沒建議
+    for token in ("95%", "90%"):
+        assert token in sec, token
+
+
+def test_共現檢查沒有把_82_6_當成這裡的下界():
+    """**82.6% 是兩次呼叫之間的雜訊，共現檢查的兩格出自同一次回覆。**
+    兩者噪聲來源不同，把前者當成後者的下界會把門檻訂得太鬆——
+    而訂鬆之後，判定不一致會安靜地通過驗收。
+
+    這一條釘的是「協定明寫了不可並排」，不是「協定沒提到 82.6%」。
+    """
+    sec = _cooccur_section()
+    assert "82.6%" in sec, "沒有提到雜訊底線，讀的人會自己拿它來當下界"
+    assert "同一次" in sec
+    assert "不可並排" in sec
+
+
+def test_共現檢查說明了不通過要改定義而不是重跑():
+    """重跑同一組定義只會得到同一組不一致——兩格來自同一次回覆，
+    不一致的來源是定義，不是抽樣波動。少了這一句，第一個反應會是重跑。
+    """
+    sec = _cooccur_section()
+    assert "不是重跑，是改定義" in sec
+    assert "全量重跑" in sec        # 改完定義之後要做的事也要寫
+
+
+def test_none_的佔比要先扣掉_tool_injected():
+    """**殘留撞號要寫在協定裡，不只寫在字典裡。** 讀 `none` 佔比的人
+    看的是協定；字典裡那一句他不會翻到，而 `none` 的佔比正是要報的數字。
+    """
+    sec = _cooccur_section()
+    assert "tool_injected" in sec
+    assert "扣除" in sec or "扣掉" in sec
+    # 字典那一邊也要有，兩邊各自都會被單獨讀到
+    rows = {r["代碼"]: r for r in _triage_rows() if r["軸"] == "axis_level"}
+    assert "tool_injected" in rows["none"]["邊界說明"]
+
