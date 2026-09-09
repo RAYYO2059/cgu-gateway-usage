@@ -2787,16 +2787,35 @@ def test_共現檢查有_n_的下限而且下限講的是解析度():
     assert "差小於量測解析度時，不要從方向讀出結論" in sec
 
 
-def test_共現檢查的門檻標明是建議值且寫在跑之前():
+def test_共現檢查的門檻已裁定而且三段都有數字():
     """門檻是預先登記的。**跑完再挑一個剛好通過的數字，等於用結果定義通過。**
-    值域與門檻由對話端裁定，這裡只驗「標明了待裁定」與「標明了寫在跑之前」。
+
+    定案之後這裡改驗「不再標著待裁定」——留著「建議值」的字樣，
+    下一個讀的人會以為還可以動它。
     """
     sec = _cooccur_section()
-    assert "建議值" in sec and "待裁定" in sec
+    assert "已裁定" in sec
+    assert "建議值" not in sec and "待裁定" not in sec, "門檻已定案，字樣要拿掉"
     assert "寫定於重跑之前" in sec
-    # 三段門檻都要有數字，否則「建議」等於沒建議
-    for token in ("95%", "90%"):
+    for token in ("≥ 95%", "90–95%", "< 90%"):
         assert token in sec, token
+    # 定案之後唯一能改的理由要寫出來，否則「不能改」讀起來像不能質疑
+    assert "用結果定義通過" in sec
+
+
+def test_門檻不得因為這一批沒過而放寬():
+    """**這條擋的是日後有人拿 82.6% 把門檻降到 85%。**
+
+    雜訊底線 82.6% 是「兩次呼叫之間」的量測，共現檢查的兩格出自同一次
+    回覆——噪聲來源不同，前者不是後者的下界。這段理由要逐字留著：
+    它是唯一擋得住「85% 也很嚴格啊」的東西。
+    """
+    sec = _cooccur_section()
+    assert "82.6%" in sec
+    assert "兩次呼叫之間" in sec
+    assert "同一次" in sec
+    assert "不可並排" in sec
+    assert "不能因為「這一批剛好沒過」而改" in sec
 
 
 def test_共現檢查沒有把_82_6_當成這裡的下界():
@@ -2831,4 +2850,78 @@ def test_none_的佔比要先扣掉_tool_injected():
     # 字典那一邊也要有，兩邊各自都會被單獨讀到
     rows = {r["代碼"]: r for r in _triage_rows() if r["軸"] == "axis_level"}
     assert "tool_injected" in rows["none"]["邊界說明"]
+# --- tool_injected 的群：整群移出母數，axis_level 不讀（2026-09-09 裁定）----
+#
+# 這一組釘三個地方：純函式的判準、協定的規則、字典的那一列。
+# **三處各自都讀得通**，所以少了任何一處都不會有徵兆。
+
+def test_tool_injected_的_axis_level_只認_none_與_unsure():
+    assert jc.TOOL_INJECTED_OK_LEVELS == frozenset({"none", "unsure"})
+    for lv in ("none", "unsure"):
+        assert not jc.tool_injected_level_anomaly("tool_injected", lv), lv
+    carrier = jc._load_carrier()
+    實質值 = [v for v in carrier.FIELDS["axis_level"]
+              if v not in jc.TOOL_INJECTED_OK_LEVELS]
+    assert 實質值, "值域裡沒有實質值——這條檢查會變成空真"
+    for lv in 實質值:
+        assert jc.tool_injected_level_anomaly("tool_injected", lv), lv
+
+
+def test_異常檢查只認_tool_injected():
+    """**拿同一條去檢查別的 disposition 會把正常判定報成異常。**
+    `service_relay` 配 `not_attributable`、`insufficient` 配
+    `insufficient_data` 都是正確判定，不得進異常清單。
+    """
+    carrier = jc._load_carrier()
+    其他 = [d for d in carrier.FIELDS["disposition"] if d != "tool_injected"]
+    assert 其他
+    for dispo in 其他:
+        for lv in carrier.FIELDS["axis_level"]:
+            assert not jc.tool_injected_level_anomaly(dispo, lv), (dispo, lv)
+
+
+def test_異常檢查不進提示詞():
+    """**加一道檢查不該變成換一個實驗。** 這條檢查若碰到指紋的任何一項
+    輸入，既有判定就全部作廢——而它只是輸出端的一個計數。
+    """
+    src = jc.__file__ and Path(jc.__file__).read_text(encoding="utf-8")
+    fn = src.split("def tool_injected_level_anomaly(")[1].split("\ndef ")[0]
+    for forbidden in ("PROMPT_TEMPLATE", "FIELD_HELP", "META_FIELDS",
+                      "BLIND_PROBE", "cli_flags", "build_json_schema"):
+        assert forbidden not in fn, forbidden
+    # 指紋本身也釘住：CURRENT_FINGERPRINT 沒變就代表沒動到那十一項
+    assert _real_fingerprint() == CURRENT_FINGERPRINT
+
+
+def test_協定寫了_tool_injected_不加值的理由():
+    """**「不加值」是決定，理由不寫下來就會被當成疏漏補回去。**
+    下一個看到 axis_level 沒有 not_applicable 的人，第一個念頭是加一個。
+    """
+    sec = _cooccur_section()
+    assert "整群移出分類母數" in sec
+    assert "那個問題**不成立**" in sec
+    assert "不需要判" in sec
+    # 不加 not_applicable 的理由：混合軸
+    assert "not_applicable" in sec
+    assert "適用性" in sec and "能力" in sec
+    # 驗收檢查是回報不是硬擋，理由也要在
+    assert "不硬擋" in sec
+    assert "不換指紋" in sec
+
+
+def test_扣除規則同時要求報被扣掉的群數():
+    """**只寫「要扣掉」不夠。** 分母悄悄變小，比例照樣算得出來，
+    而讀者無從判斷那個扣除動了多少。
+    """
+    sec = _cooccur_section()
+    assert "扣除 `tool_injected` 後的\nnone" in sec or "扣除 `tool_injected` 後的" in sec
+    assert "同時報被扣掉的群數" in sec
+    # 字典那一列也要有同一條——讀佔比的人看協定，改值域的人看字典
+    rows = {r["代碼"]: r for r in _triage_rows() if r["軸"] == "axis_level"}
+    note = rows["none"]["邊界說明"]
+    assert "整群移出分類母數" in note
+    assert "不需要判" in note
+    assert "not_applicable" in note and "混合軸" in note
+    assert "同時報被扣掉的群數" in note
+    assert "未解決" not in note, "已裁定，不可再標成未解決"
 
