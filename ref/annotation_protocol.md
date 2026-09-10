@@ -638,14 +638,42 @@ A019 的異值在 `#2`（`tool`／`tool`／**`user`**），兩群的異值在不
 剛好通過的數字，等於用結果去定義通過。
 
 `disposition` 與 `axis_level` 是**同一次回覆裡的兩格**，不是兩次獨立量測。
-兩軸各有一個值在講同一件事，若模型理解了定義，這兩對應該幾乎一定同時出現：
 
-| disposition | 應共現的 axis_level | 講的是同一件事 |
+**2026-09-10 起，軸間約束寫進提示詞**（載具的 `AXIS_CONSTRAINTS`，經
+`render_axes` 併入 `axes_block`）。約束分兩級，而**檢查也必須跟著分兩級**——
+把它們放在同一條規則底下，量到的東西會混成兩種不同的性質：
+
+| 級別 | disposition → axis_level | 檢查的是什麼 |
 | --- | --- | --- |
-| `insufficient` | `insufficient_data` | 材料被上游拿掉了，該判而判不了 |
-| `service_relay` | `not_attributable` | 意圖屬於不使用本 gateway 的第三方 |
+| **must** | `tool_injected` → `none` | 指令遵循 |
+| **must** | `service_relay` → `not_attributable` | 指令遵循 |
+| **must** | `insufficient` → `insufficient_data` | 指令遵循 |
+| **default** | `batch_project` → `all_three` | 一致性 |
+| **default** | `user_envelope` → `invocation_only` | 一致性 |
 
-**不一致代表其中一格判錯了**，而不代表兩軸攜帶了不同的資訊。
+**為什麼只有三條寫成 must。** 五條全寫成硬約束，`axis_level` 就變成
+`disposition` 的純函數——**那一軸的資訊量歸零**，而共現檢查會退化成
+「模型有沒有照抄規則」。另外兩條在資料上不是必然：外框看不出 role/domain
+的 `batch_project` 只能是 `invocation_only`，外框已載明的 `user_envelope`
+可以是 `all_three`。
+
+#### must 約束：違反即異常，不算百分比
+
+**這不是一致性檢查，是指令遵循檢查。** 模型是被明文指示這樣填的，
+「共現率 100%」不代表兩個判斷一致，只代表它讀了那一段。
+
+- 判準：**違反即異常**，逐群回報 `group_id` 與它實際填的值。
+- **不算百分比。** 一個違反就是一個要看的東西，除以總數只會把它稀釋掉。
+- 違反率非零的意思是**模型沒讀懂約束區塊**——那是**提示詞的問題，
+  不是判定的問題**。處理方式是改提示詞重跑，不是把那幾群挑掉。
+
+沿革：加約束之前實測 5 個 `tool_injected` 群**全部**給了實質 `axis_level`
+（4 個 `all_three`、1 個 `not_attributable`），違反率 100%；
+加約束之後 3 群全部填 `none`，違反率 0。
+
+#### default 約束：兩個方向的共現率，沿用三段門檻
+
+**這一對才是真的一致性檢查**——模型可以偏離而不算違規，偏離本身是資訊。
 
 #### 兩個方向都要算，而且不可只報一個
 
@@ -665,6 +693,8 @@ A019 的異值在 `#2`（`tool`／`tool`／**`user`**），兩群的異值在不
 `docs/ENGINEERING_NOTES.md`〈並排的數字要標明各自的算法〉。
 
 #### 判準（已裁定，2026-09-09）
+
+**下表只適用 default 那兩對。** must 那三條走上面的違反計數。
 
 | 兩個方向都算出來之後 | 判定 |
 | --- | --- |

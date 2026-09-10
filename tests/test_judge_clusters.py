@@ -1332,11 +1332,20 @@ def test_only_在閘門之後才套用():
 # ===========================================================================
 def _fake_dataset(tmp_path, group_ids, screen_value="clean"):
     """造一組最小的資料檔，讓 main() 跑得起來。內容全部是現編的。"""
-    meta = pd.DataFrame([{
-        "group_id": g, "uid數": 3, "相異內容數": 40, "請求數": 120,
+    # **從 META_FIELDS 推導，不手抄一份。** 手抄的那份會與 META_FIELDS 漂掉
+    # ——加一個欄位，這裡就 KeyError；而在真的加欄之前，它一直是綠的，
+    # 看不出它保護的範圍已經比實際的中繼資料少了一欄。
+    _VALUES = {
+        "uid數": 3, "相異內容數": 40, "請求數": 120,
         "前綴佔中位內容長度比例": 0.4, "unit_type分布": "{}",
         "request_style分布": "{}", "內容長度_中位": 800,
-    } for g in group_ids])
+        "隱藏上下文請求佔比": 0.0,
+    }
+    missing = [k for k in jc.META_FIELDS if k not in _VALUES]
+    assert not missing, f"META_FIELDS 新增了 {missing}，這裡要補一個假值"
+    meta = pd.DataFrame([{"group_id": g,
+                          **{k: _VALUES[k] for k in jc.META_FIELDS}}
+                         for g in group_ids])
     meta.to_parquet(tmp_path / "clusters.parquet")
     pd.DataFrame([{
         "group_id": g, "prefix_raw": f"FRAME-{g}-" + "x" * 40,
@@ -1751,7 +1760,7 @@ def test_output_不影響指紋():
 
 
 CURRENT_FINGERPRINT = (
-    "83086cd22c9d8a2e1418a24efeccd0455e682531d2a319987f83f6d03fe2f73e")
+    "e13f9738fba32a8f5167807157718758954dc2e2f1304392bdf86b3b7dd97114")
 """現行指紋。**改動它要跟全量重跑一起做，不是改個數字讓測試變綠。**
 
 沿革（每一次都要寫明換的理由，否則下一個人分不出「有意的」與「改綠的」）：
@@ -1780,6 +1789,12 @@ CURRENT_FINGERPRINT = (
   **`a2dc7b11` 的 118 筆判定因此作廢**，保留為
   `judge_output.a2dc7b11.constraint_absent.csv`，用途是量「加約束前後
   axis_level 變了多少、disposition 動了沒有」。
+- `e13f9738f…` **本次**（2026-09-10）：`META_FIELDS` 補
+  `隱藏上下文請求佔比`（群內符合 `prompt_tokens > 4 × prompt_text_len`
+  的請求佔比）。理由：`insufficient` 的判準就是這個門檻，而判定器一直
+  收不到 `prompt_tokens`——**判準寫了但不可執行**，兩次全量執行
+  `insufficient` 都是 0 群。
+  `judge_output.83086cd2.csv` 因此作廢，保留為比對用。
 
 釘在測試裡的理由：指紋在每一列輸出上都有，但沒有東西在讀它——
 `stale_fingerprints` 只在同一個檔案內比對，跨檔、跨次執行沒有人看。
@@ -3076,4 +3091,106 @@ def test_main_實際算出來的指紋就是釘住的那個(monkeypatch, capsys,
                if "提示詞指紋" in ln]
     assert len(printed) == 1, printed
     assert CURRENT_FINGERPRINT in printed[0], printed[0]
+# --- 隱藏上下文欄與盲化門檻（2026-09-10，指紋 e13f9738…）--------------------
 
+def test_insufficient_的判準所需欄位有送進判定器():
+    """**判準寫了但判定器收不到對應欄位，等於沒寫。**
+
+    `insufficient` 的判準是 `prompt_tokens > 4 × prompt_text_len`，
+    而 `META_FIELDS` 一直沒有任何與 token 有關的欄位——實測兩次全量執行
+    `insufficient` 都是 0 群。這一條釘的是那個欄位還在。
+    """
+    assert "隱藏上下文請求佔比" in jc.META_FIELDS
+    rows = {r["代碼"]: r for r in _triage_rows() if r["軸"] == "disposition"}
+    assert "prompt_tokens" in rows["insufficient"]["判準"]
+
+
+def test_中繼資料欄位在群集檔裡都存在():
+    """`render_metadata` 逐欄取值，缺一欄就 KeyError——而那只有在真的跑
+    判定的時候才會炸，`--dry-run` 不會碰到。"""
+    if not CLUSTERS.exists():
+        pytest.skip("群集檔不在本機")
+    cols = set(pd.read_parquet(CLUSTERS).columns)
+    missing = [k for k in jc.META_FIELDS if k not in cols]
+    assert not missing, f"clusters.parquet 缺 {missing}"
+
+
+def test_盲化門檻落在實測的兩個值之間():
+    """**這條現在是真判準，不是控制界。**
+
+    量法：同一群（A113）、同一份真實判定提示詞，有無 `--system-prompt`
+    各跑一次。未盲化 3890（n=3 零抖動）、盲化 2596。門檻要落在中間，
+    而且兩側都要有餘裕——舊值 2600 只離盲化側 4 tokens，任何提示詞加長
+    都會讓它變成常態警示，而常態化的警示等於沒有警示。
+    """
+    lo = jc.PROMPT_TOKENS_BLINDED_MEASURED
+    hi = jc.PROMPT_TOKENS_UNBLINDED_MEASURED
+    assert lo < jc.PROMPT_TOKENS_FLOOR_WARN < hi
+    margin = min(jc.PROMPT_TOKENS_FLOOR_WARN - lo,
+                 hi - jc.PROMPT_TOKENS_FLOOR_WARN)
+    assert margin >= 500, f"兩側餘裕只有 {margin} tokens，太靠邊"
+    # 門檻不再等於單次警示線——兩者管的是不同的事
+    assert jc.PROMPT_TOKENS_FLOOR_WARN != jc.PROMPT_TOKENS_WARN
+
+
+def test_盲化判定用的是門檻不是等號():
+    """邊界要驗，否則「剛好等於」落在哪一邊沒有人知道。"""
+    t = jc.PROMPT_TOKENS_FLOOR_WARN
+    assert not jc.prompt_tokens_floor_broken(t)
+    assert not jc.prompt_tokens_floor_broken(t - 1)
+    assert jc.prompt_tokens_floor_broken(t + 1)
+    # 實測的兩個值要分別落在對的一邊
+    assert not jc.prompt_tokens_floor_broken(jc.PROMPT_TOKENS_BLINDED_MEASURED)
+    assert jc.prompt_tokens_floor_broken(jc.PROMPT_TOKENS_UNBLINDED_MEASURED)
+
+
+def test_協定把_must_與_default_的檢查分開():
+    """**放在同一條規則底下，量到的東西會混成兩種不同的性質。**
+    must 那三條量的是指令遵循（模型被明文指示這樣填），
+    default 那兩條才是一致性。共現率 100% 在前者不代表任何事。
+    """
+    sec = _cooccur_section()
+    assert "指令遵循" in sec and "一致性" in sec
+    assert "違反即異常" in sec
+    assert "不算百分比" in sec
+    # 違反的意思要寫明：提示詞問題，不是判定問題
+    assert "提示詞的問題" in sec
+    # 三段門檻那張表要標明只適用 default
+    assert "只適用 default" in sec
+    # 為什麼只有三條 must 的理由要在
+    assert "純函數" in sec and "資訊量歸零" in sec
+
+
+def test_協定列的_must_與_default_與載具一致():
+    """協定寫一份、載具寫一份，兩邊漂掉不會報錯——協定寫著五條約束，
+    判定器只送三條，而輸出看不出差別。"""
+    sec = _cooccur_section()
+    for dispo, level, strength, _ in jc._load_carrier().AXIS_CONSTRAINTS:
+        assert f"`{dispo}` → `{level}`" in sec, (dispo, level)
+        # 該列要標對級別
+        line = [ln for ln in sec.splitlines()
+                if f"`{dispo}` → `{level}`" in ln]
+        assert len(line) == 1, (dispo, line)
+        assert f"**{strength}**" in line[0], (dispo, strength, line[0])
+
+
+
+def test_用量信封回_0_不算盲化良好():
+    """**0 不是一個很小的值，是沒量到。**
+
+    實測 118 群裡有 1 群（B082）的用量信封整組回 0——呼叫成功、成本
+    0.0163、耗時 18 秒，但三個 token 欄位全是 0。`min()` 因此取到 0，
+    而 `prompt_tokens_floor_broken(0)` 是 False：**地板檢查靜默通過**，
+    那正是它要擋的事情的反面。
+
+    這一條釘的是「0 落在安全側」這個事實本身——修法（收尾時把 0 排除並
+    另外計數）在 main() 裡，這裡先把危險性寫死，免得有人把它讀成
+    「0 代表很盲」。
+    """
+    assert not jc.prompt_tokens_floor_broken(0), \
+        "若 0 變成 broken，下面那句就不再是這條測試要防的事"
+    # 真正的盲化值與 0 差了兩千多，0 顯然不是一個合法的量測結果
+    assert jc.PROMPT_TOKENS_BLINDED_MEASURED > 2000
+    src = Path(jc.__file__).read_text(encoding="utf-8")
+    assert "token_unmeasured" in src, "沒量到的次數要單獨計數"
+    assert "ptt <= 0" in src, "0 要在累計最小值之前被排除"
