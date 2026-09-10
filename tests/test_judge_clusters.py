@@ -3194,3 +3194,25 @@ def test_用量信封回_0_不算盲化良好():
     src = Path(jc.__file__).read_text(encoding="utf-8")
     assert "token_unmeasured" in src, "沒量到的次數要單獨計數"
     assert "ptt <= 0" in src, "0 要在累計最小值之前被排除"
+
+
+def test_缺值那條記了_0_落在安全側這個形狀():
+    """條目的價值全在「檢查的結果與它要擋的事情相反」那一句。
+    少了它，這條會被讀成一般的資料清理建議。"""
+    text = (REPO / "docs" / "ENGINEERING_NOTES.md").read_text(encoding="utf-8")
+    entry = _note_body("缺值不要當成一個極端值參與比較")
+    assert "正好相反" in entry
+    assert "排除並計數" in entry
+    # 與既有的 NA/0 原則要接上，否則看不出這是同一個錯誤換了地方
+    assert "unpriced_local" in entry and "unpriced_no_table" in entry
+    assert "檢查邏輯" in entry
+    # 單邊門檻那個推論不可省——它才是可執行的部分
+    assert "安全側" in entry
+
+
+def test_閘門那條要求把指名記下來():
+    """指名會漂就是誤報——這是唯一不必重跑就能分辨誤報與真訊號的辦法。"""
+    entry = _note_body("閘門的問句若含需要判斷的例外條款，判斷本身會成為誤報來源")
+    assert "指名是哪一項" in entry
+    assert "理由會漂就是誤報" in entry
+    assert "留一個" in entry and "欄位" in entry
