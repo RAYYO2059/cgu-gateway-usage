@@ -1368,7 +1368,8 @@ def _real_fingerprint():
     否則會先被指紋守門擋掉——那道守門在遷移之前，而且順序是對的。"""
     carrier = jc._load_carrier()
     schema = jc.build_json_schema(carrier.FIELDS)
-    axes = jc.render_axes(carrier.FIELDS, carrier.FIELD_HELP)
+    axes = jc.render_axes(carrier.FIELDS, carrier.FIELD_HELP,
+                          carrier.AXIS_CONSTRAINTS)
     return jc.template_fingerprint(axes, "raw", runtime="claude_code",
                                    flags=jc.cli_flags(schema), schema=schema)
 
@@ -1551,18 +1552,39 @@ def test_指紋守門的訊息要說出舊指紋(monkeypatch, tmp_path):
 
 # --- 盲化探針的豁免 ---------------------------------------------------------
 def test_探針的豁免只放行環境資訊():
-    """docstring 早就寫著「Claude Code 注入的環境 context」是刻意不問的，
-    但那個豁免只在 docstring 裡，探針的第 (2) 項字面上仍然涵蓋它——
-    於是它對一個恆真條件時而回 NO 時而回 YES（實測 16 次 15 NO / 1 YES）。
-    **豁免要寫在被執行的那份文字裡，不是寫在旁邊的說明裡。**"""
+    """豁免要寫在**被執行的那份文字**裡，不是寫在旁邊的說明裡。
+
+    沿革：最早那個豁免只在 docstring 裡，探針的第 (2) 項字面上仍涵蓋
+    環境資訊；2026-09-07 把它寫進問句，成為一句附註（「例外：…不算」）。
+    **附註不夠**——它要模型自己界定「眼前這段算不算例外」，而模型每次
+    界定得不一樣。2026-09-10 改成兩份清單（【不算】列在前、【算】列在後），
+    並明寫「只有【不算】清單上的東西 → NO」。
+
+    量測（真實路徑，即 `blindness_check` 逐字相同的旗標構造）：
+
+        附註版   n=12，YES 7 次 = 58%
+                 同一批的 prompt_tokens_total 1280–1283，
+                 YES（1281–1283）與 NO（1280–1282）**完全重疊**
+                 ——上下文沒變，變的是模型對附註的讀法
+        判定器啟動時的實際擋下率：10 次判決擋下 4 次
+
+    這一版之前的 docstring 記著「16 次 15 NO / 1 YES」，與上面兩個數字
+    都對不上；那次量測的構造沒有留下紀錄，**不採信，不並排**。
+    見 `docs/ENGINEERING_NOTES.md`〈並排的數字要標明各自的算法〉。
+    """
     probe = jc.BLIND_PROBE_PROMPT
-    assert "例外" in probe
+    # 豁免要是一份清單，不是一句要模型自己界定的附註
+    assert "【不算】" in probe
+    assert probe.index("【不算】") < probe.index("【算】"), "不算的清單要在前面"
     assert "當前日期" in probe
-    # 豁免必須是窄的：除此之外的都算
-    assert "除此之外的任何記憶都算" in probe
+    assert "系統提示本身" in probe
+    # 豁免必須是窄的：只放行系統提示與環境資訊，且要明講身分也不算
+    assert "即使它指出使用者是誰，也不算" in probe
     # 真正危險的三項一項都不能被放行
-    for must in ("CLAUDE.md", "先前的對話紀錄", "讀取檔案系統的工具"):
+    for must in ("CLAUDE.md", "先前的對話紀錄", "檔案系統"):
         assert must in probe, must
+    # 「只有不算的東西 → NO」這個對應要寫死，不能只列清單
+    assert "→ answer 回 NO" in probe
 
 
 def test_探針問法改了指紋就會變():
@@ -1729,7 +1751,7 @@ def test_output_不影響指紋():
 
 
 CURRENT_FINGERPRINT = (
-    "a2dc7b114624c15ed0f36659e035b75e91d90ef1b5c8b106eb43ae7fd5c678a0")
+    "83086cd22c9d8a2e1418a24efeccd0455e682531d2a319987f83f6d03fe2f73e")
 """現行指紋。**改動它要跟全量重跑一起做，不是改個數字讓測試變綠。**
 
 沿革（每一次都要寫明換的理由，否則下一個人分不出「有意的」與「改綠的」）：
@@ -1747,6 +1769,17 @@ CURRENT_FINGERPRINT = (
   `none` 收窄成「判不出來而且不知道為什麼」；`invocation_only` 的定義文字
   補上「role/domain 需抽樣」。**`240ffe17` 下判定了 0 筆，所以這次換指紋
   沒有作廢任何既有判定。**
+- `83086cd22…` **本次**（2026-09-10）：兩處改動一起換。
+  (1) 盲化探針措辭改寫——舊問法把「什麼不算」寫成一句附註要模型自己界定，
+      實測偽陽性率 58%（真實路徑 n=12，YES 與 NO 的 prompt_tokens_total
+      完全重疊）。新問法把「不算」列成清單放前面，並明寫「只有這些 → NO」。
+  (2) 軸間約束進提示詞（載具的 `AXIS_CONSTRAINTS`，經 `render_axes` 併入
+      `axes_block`）。理由：118 群實測 5 個 tool_injected 群**全部**給了
+      實質 axis_level，沒有一個填 none——約束只寫在字典與協定裡，
+      判定器讀不到。
+  **`a2dc7b11` 的 118 筆判定因此作廢**，保留為
+  `judge_output.a2dc7b11.constraint_absent.csv`，用途是量「加約束前後
+  axis_level 變了多少、disposition 動了沒有」。
 
 釘在測試裡的理由：指紋在每一列輸出上都有，但沒有東西在讀它——
 `stale_fingerprints` 只在同一個檔案內比對，跨檔、跨次執行沒有人看。
@@ -2924,4 +2957,123 @@ def test_扣除規則同時要求報被扣掉的群數():
     assert "not_applicable" in note and "混合軸" in note
     assert "同時報被扣掉的群數" in note
     assert "未解決" not in note, "已裁定，不可再標成未解決"
+# --- 軸間約束（2026-09-10，指紋 83086cd2…）----------------------------------
+#
+# **這一組最重要的是最後一個測試。** 前面幾個驗的是「約束寫對了」，
+# 最後一個驗的是「main() 真的用了它」——而那正是本輪查出來的漏洞形狀。
+
+def _constraints():
+    return jc._load_carrier().AXIS_CONSTRAINTS
+
+
+def test_軸間約束的每個值都在值域裡():
+    """**約束寫錯值不會報錯。** 打錯字的那條就永遠不會成立，
+    而輸出看起來完全正常——模型照樣填、共現率照樣算得出來。
+    """
+    carrier = jc._load_carrier()
+    assert _constraints(), "沒有任何約束——下面每一條都會變成空真"
+    for dispo, level, strength, why in _constraints():
+        assert dispo in carrier.FIELDS["disposition"], dispo
+        assert level in carrier.FIELDS["axis_level"], level
+        assert strength in ("must", "default"), strength
+        assert why.strip(), f"{dispo} 沒寫理由"
+
+
+def test_五個_disposition_分類值都有約束():
+    """`unsure` 是棄權值，不該有約束；其餘五個都要有，且各只有一條。"""
+    carrier = jc._load_carrier()
+    分類值 = [v for v in carrier.FIELDS["disposition"] if v != "unsure"]
+    covered = [c[0] for c in _constraints()]
+    assert sorted(covered) == sorted(分類值), (sorted(covered), sorted(分類值))
+    assert len(covered) == len(set(covered)), "同一個 disposition 有兩條約束"
+    assert "unsure" not in covered
+
+
+def test_must_與_default_要分開而且不能全部是_must():
+    """**全部寫成 must，axis_level 就變成 disposition 的純函數。**
+    那一軸的資訊量歸零，而共現檢查會退化成「模型有沒有照抄規則」——
+    它量的就不再是兩個判斷是否一致。
+    """
+    strengths = {c[0]: c[2] for c in _constraints()}
+    must = {k for k, v in strengths.items() if v == "must"}
+    default = {k for k, v in strengths.items() if v == "default"}
+    assert must and default, "must 與 default 至少各要有一個"
+    # 定義上必然的那三條
+    assert must == {"tool_injected", "service_relay", "insufficient"}, must
+    assert default == {"batch_project", "user_envelope"}, default
+
+
+def test_tool_injected_的約束就是本輪要修的那一條():
+    c = {x[0]: x for x in _constraints()}["tool_injected"]
+    assert c[1] == "none"
+    assert c[2] == "must"
+    assert "移出分類母數" in c[3]
+    assert "不成立" in c[3]
+
+
+def test_約束與字典的處置欄不相牴觸():
+    """字典是給人讀的、約束是給模型讀的，兩邊講的必須是同一件事。
+
+    **不比對逐字**——處置欄還寫了記帳規則（「計入不可判定率」）之類
+    判定器不需要的東西。只比對「字典有沒有提到那個 axis_level 值」。
+    """
+    rows = {r["代碼"]: r for r in _triage_rows() if r["軸"] == "axis_level"}
+    for dispo, level, _, _ in _constraints():
+        assert level in rows, level
+        note = rows[level]["邊界說明"]
+        assert dispo in note, f"字典的 axis_level={level} 沒提到 {dispo}"
+
+
+def test_約束有進提示詞的_axes_block():
+    """**只加常數不算數。** 常數在載具裡而 `render_axes` 沒帶它，
+    提示詞就沒有約束，而指紋、輸出、測試全都看不出差別。
+    """
+    carrier = jc._load_carrier()
+    無 = jc.render_axes(carrier.FIELDS, carrier.FIELD_HELP)
+    有 = jc.render_axes(carrier.FIELDS, carrier.FIELD_HELP,
+                        carrier.AXIS_CONSTRAINTS)
+    assert 無 != 有, "帶了約束卻沒有改變 axes_block"
+    assert "軸間約束" in 有 and "軸間約束" not in 無
+    assert "disposition=tool_injected → axis_level=none" in 有
+    assert "必須" in 有 and "預設" in 有
+    assert jc.template_fingerprint(無) != jc.template_fingerprint(有)
+
+
+def test_探針把不算的東西列成清單而不是附註():
+    """舊問法的偽陽性率 58%，成因是例外寫成一句要模型自己界定的附註。
+
+    這裡驗的是**結構**：兩份清單都在、而且「只有不算的東西 → NO」
+    這個對應寫死了。不驗字數。
+    """
+    probe = jc.BLIND_PROBE_PROMPT
+    assert "【不算】" in probe and "【算】" in probe
+    # 不算的兩項要逐項列出
+    assert "系統提示本身" in probe
+    assert "當前日期" in probe
+    assert "即使它指出使用者是誰，也不算" in probe
+    # 算的四項
+    for token in ("CLAUDE.md", "先前的對話紀錄", "檔案系統"):
+        assert token in probe, token
+    # 第 (4) 項曾被「環境概述提到 shell」誤判過
+    assert "實際可呼叫的工具定義為準" in probe
+    # NO 的條件要明寫
+    assert "→ answer 回 NO" in probe
+    assert probe.count("YES") >= 1 and probe.count("NO") >= 1
+
+
+def test_main_實際算出來的指紋就是釘住的那個(monkeypatch, capsys, tmp_path):
+    """**本輪查出來的漏洞就是這個形狀。**
+
+    `_real_fingerprint()` 是測試自己重建的一份，而重建的東西會與被重建的
+    東西漂掉——本輪的盲化探針量測就是這樣量錯的（旗標串用
+    `startswith("--json-schema")` 過濾，只濾掉旗標名沒濾掉它的值）。
+
+    所以這裡不重建：跑 `main(["--dry-run"])`，抓它**自己印出來**的那一行。
+    """
+    out = tmp_path / "fp_probe.csv"
+    assert jc.main(["--dry-run", "--output", str(out)]) == 0
+    printed = [ln for ln in capsys.readouterr().out.splitlines()
+               if "提示詞指紋" in ln]
+    assert len(printed) == 1, printed
+    assert CURRENT_FINGERPRINT in printed[0], printed[0]
 
