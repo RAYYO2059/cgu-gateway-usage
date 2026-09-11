@@ -108,7 +108,16 @@ repo：https://github.com/RAYYO2059/cgu-gateway-usage
 目前已有 30 筆 v1 手填紀錄，7 筆違反 must，原檔保持不動；修正 must 後的新
 紀錄預留於 `_rescued_scratchpad/blind_labels.v2.csv`。版本摘要在
 `_rescued_scratchpad/blind_labels_versions.json`。`ref/label_dictionary.csv` 的
-五個 disposition 列之 `具體例子` 目前都是 `—` 佔位符，例子由人補寫，代理不得代填。
+五個 disposition 列之 `具體例子` 已依人工提供的逐字稿補齊；該欄不進
+`render_axes()`，所以不改變 Opus 的本地請求設定指紋。
+
+Codex 的 58 群交叉判定已在 repo 外的 `codex_blind_2026-09/` 完成，輸出是
+`codex_judge_output.csv`。執行端為 `codex-cli 0.153.4`、`gpt-5.6-sol`；每群
+獨立呼叫，使用 deny-root 權限設定，專案與隔離目錄的機械讀取探針皆 blocked，
+盲化探針與 58 群判定的工具事件都是 0。58 群全部成功，三條 must 皆 0 違反。
+執行器是 `src/classify_lite/judge_codex_blind.py`；Codex 內容指紋與執行指紋記在
+隔離目錄的 `prompt_manifest.json`。這仍是開發階段的交叉判定材料：Ray 只標完
+30/58，且尚未完成間隔至少 3 天的 15 群盲重標，所以不得把它寫成已驗證結果。
 
 ---
 
@@ -551,7 +560,7 @@ src/          管線。clean 與 lite 兩條線平鋪，共用模組無前綴
   aggregate.py / aggregate_lite.py   L1 → L2
   metrics/ / metrics_lite/           指標
   college.py / pricing.py            共用的判斷邏輯
-  classify_lite/                     用途分類前置（markers、prefilter）
+  classify_lite/                     用途分類前置、盲標抽樣與隔離交叉判定器
   render_*.py                        文件渲染
 
 ref/          人工維護的對照表（白名單制 gitignore，新檔要先 check-ignore）
