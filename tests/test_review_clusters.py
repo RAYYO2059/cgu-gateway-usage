@@ -502,7 +502,7 @@ def test_載具只讀這七個檔():
              if "HERE /" in l and "=" in l]
     assert set(paths) == {"CLUSTERS", "MEMBERS", "PREFIXES",
                           "REVIEW_CSV", "SCREEN_CSV", "BLIND_SAMPLE_CSV",
-                          "BLIND_LABEL_CSV"}
+                          "BLIND_LABEL_CSV", "BLIND_LABEL_V2_CSV"}
 
 
 # --- 人工盲標模式 -----------------------------------------------------------
@@ -542,6 +542,17 @@ def test_盲標每次最多三批每批十群():
     assert items[-1] == (32, "X031")
 
 
+def test_must_axis_constraints_自動產生():
+    assert rc.must_axis_levels() == {
+        "tool_injected": "none",
+        "service_relay": "not_attributable",
+        "insufficient": "insufficient_data",
+    }
+    assert rc.must_axis_level("batch_project") is None
+    custom = (("custom", "none", "must", "fixture"),)
+    assert rc.must_axis_level("custom", custom) == "none"
+
+
 def test_盲標紀錄欄位與續跑契約(tmp_path):
     path = tmp_path / "blind_labels.csv"
     rc.append_review(path, {
@@ -566,6 +577,7 @@ def test_盲標_stdout_不洩漏分層或模型欄位且順序另行打散(
     ids = [f"X{i:03d}" for i in range(12)]
     sample_path = tmp_path / "blind_label_sample.csv"
     label_path = tmp_path / "blind_labels.csv"
+    v2_label_path = tmp_path / "blind_labels.v2.csv"
     cluster_path = tmp_path / "clusters.parquet"
     member_path = tmp_path / "members.parquet"
     cluster_path.write_bytes(b"fixture")
@@ -583,6 +595,7 @@ def test_盲標_stdout_不洩漏分層或模型欄位且順序另行打散(
     members = pd.DataFrame({"group_id": ids})
     monkeypatch.setattr(rc, "BLIND_SAMPLE_CSV", sample_path)
     monkeypatch.setattr(rc, "BLIND_LABEL_CSV", label_path)
+    monkeypatch.setattr(rc, "BLIND_LABEL_V2_CSV", v2_label_path)
     monkeypatch.setattr(rc, "CLUSTERS", cluster_path)
     monkeypatch.setattr(rc, "MEMBERS", member_path)
     monkeypatch.setattr(
@@ -612,9 +625,11 @@ def test_盲標_stdout_不洩漏分層或模型欄位且順序另行打散(
     assert seen != sorted(ids)
     assert set(seen) == set(ids)
 
-    with label_path.open(encoding="utf-8-sig", newline="") as fh:
+    with v2_label_path.open(encoding="utf-8-sig", newline="") as fh:
         rows = list(csv.DictReader(fh))
     assert tuple(rows[0]) == rc.BLIND_LABEL_COLUMNS
+    assert {row["axis_level"] for row in rows} == {"none"}
+    assert "此值由 must 約束決定" in stdout
     expected_positions = {gid: i for i, gid in enumerate(rc.blind_order(ids), 1)}
     assert {row["group_id"]: int(row["seed_order"]) for row in rows} == \
         expected_positions

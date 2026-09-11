@@ -105,6 +105,10 @@ repo：https://github.com/RAYYO2059/cgu-gateway-usage
 `src/classify_lite/sample_blind_labels.py`。盲標模式只讀其中的 `group_id`，
 再用獨立顯示種子 `2026091101` 打散；不讀、不顯示分層或任何模型判定內容。
 紀錄寫入 `_rescued_scratchpad/blind_labels.csv`，每批 10 群、一次最多 3 批。
+目前已有 30 筆 v1 手填紀錄，7 筆違反 must，原檔保持不動；修正 must 後的新
+紀錄預留於 `_rescued_scratchpad/blind_labels.v2.csv`。版本摘要在
+`_rescued_scratchpad/blind_labels_versions.json`。`ref/label_dictionary.csv` 的
+五個 disposition 列之 `具體例子` 目前都是 `—` 佔位符，例子由人補寫，代理不得代填。
 
 ---
 
