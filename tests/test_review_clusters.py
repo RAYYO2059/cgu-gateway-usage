@@ -477,6 +477,7 @@ def test_screen_旗標存在且預設為關():
     source = (REPO.parent / "_rescued_scratchpad" / "review_clusters.py"
               ).read_text(encoding="utf-8")
     assert '"--screen"' in source
+    assert "if args.blind_label:" in source
     assert "return run_screen() if args.screen else run_review()" in source
 
 
@@ -495,12 +496,128 @@ def test_載具不讀也不顯示_LLM_判定結果():
         assert token not in code, f"載具碰到了 LLM 判定相關的 {token}"
 
 
-def test_載具只讀這五個檔():
+def test_載具只讀這七個檔():
     source = CARRIER.read_text(encoding="utf-8")
     paths = [l.split("=")[0].strip() for l in source.splitlines()
              if "HERE /" in l and "=" in l]
     assert set(paths) == {"CLUSTERS", "MEMBERS", "PREFIXES",
-                          "REVIEW_CSV", "SCREEN_CSV"}
+                          "REVIEW_CSV", "SCREEN_CSV", "BLIND_SAMPLE_CSV",
+                          "BLIND_LABEL_CSV"}
+
+
+# --- 人工盲標模式 -----------------------------------------------------------
+def test_盲標顯示順序用獨立種子且不沿用樣本列序():
+    given = [f"X{i:03d}" for i in range(20)]
+    first = rc.blind_order(given)
+    second = rc.blind_order(given)
+    assert rc.BLIND_ORDER_SEED != 20260911  # 抽樣腳本的 SEED
+    assert first == second
+    assert first != given
+    assert first != sorted(given)
+    assert set(first) == set(given)
+
+
+def test_實際盲標顯示順序與樣本檔列序不同():
+    if not rc.BLIND_SAMPLE_CSV.exists():
+        pytest.skip("盲標樣本不在本機")
+    file_order = rc.load_blind_sample()
+    assert rc.blind_order(file_order) != file_order
+
+
+def test_盲標樣本只讀_group_id_不帶入分層(tmp_path):
+    path = tmp_path / "sample.csv"
+    pd.DataFrame({
+        "group_id": ["X001", "X002"],
+        "stratum": ["DO-NOT-SHOW-1", "DO-NOT-SHOW-2"],
+        "reason": ["MODEL-ONLY-1", "MODEL-ONLY-2"],
+    }).to_csv(path, index=False, encoding="utf-8-sig")
+    assert rc.load_blind_sample(path) == ["X001", "X002"]
+
+
+def test_盲標每次最多三批每批十群():
+    order = [f"X{i:03d}" for i in range(40)]
+    items = rc.blind_run_items(order, {"X000", "X001"})
+    assert len(items) == rc.BLIND_BATCH_SIZE * rc.BLIND_MAX_BATCHES == 30
+    assert items[0] == (3, "X002")
+    assert items[-1] == (32, "X031")
+
+
+def test_盲標紀錄欄位與續跑契約(tmp_path):
+    path = tmp_path / "blind_labels.csv"
+    rc.append_review(path, {
+        "group_id": "X001",
+        "frame_owner": "unsure",
+        "disposition": "unsure",
+        "axis_level": "unsure",
+        "note": "",
+        "elapsed_sec": 1.2,
+        "labeled_at": "2026-09-11T12:00:00",
+        "seed_order": 7,
+    }, columns=rc.BLIND_LABEL_COLUMNS)
+    with path.open(encoding="utf-8-sig", newline="") as fh:
+        rows = list(csv.DictReader(fh))
+    assert tuple(rows[0]) == rc.BLIND_LABEL_COLUMNS
+    assert rows[0]["note"] == ""
+    assert rc.load_blind_done(path) == {"X001"}
+
+
+def test_盲標_stdout_不洩漏分層或模型欄位且順序另行打散(
+        tmp_path, monkeypatch, capsys):
+    ids = [f"X{i:03d}" for i in range(12)]
+    sample_path = tmp_path / "blind_label_sample.csv"
+    label_path = tmp_path / "blind_labels.csv"
+    cluster_path = tmp_path / "clusters.parquet"
+    member_path = tmp_path / "members.parquet"
+    cluster_path.write_bytes(b"fixture")
+    member_path.write_bytes(b"fixture")
+    pd.DataFrame({
+        "group_id": ids,
+        "stratum": ["HIDDEN-ALPHA" if i % 2 else "HIDDEN-BETA"
+                    for i in range(len(ids))],
+        "reason": ["MODEL-REASON-SENTINEL"] * len(ids),
+        "confidence": ["MODEL-CONFIDENCE-SENTINEL"] * len(ids),
+        "prompt_sha256": ["MODEL-FINGERPRINT-SENTINEL"] * len(ids),
+    }).to_csv(sample_path, index=False, encoding="utf-8-sig")
+
+    clusters = pd.DataFrame({"group_id": ids})
+    members = pd.DataFrame({"group_id": ids})
+    monkeypatch.setattr(rc, "BLIND_SAMPLE_CSV", sample_path)
+    monkeypatch.setattr(rc, "BLIND_LABEL_CSV", label_path)
+    monkeypatch.setattr(rc, "CLUSTERS", cluster_path)
+    monkeypatch.setattr(rc, "MEMBERS", member_path)
+    monkeypatch.setattr(
+        rc.pd, "read_parquet",
+        lambda path: clusters.copy() if path == cluster_path else members.copy())
+
+    monkeypatch.syspath_prepend(str(REPO))
+    from src import config
+    monkeypatch.setattr(config, "lite_raw_dir", lambda: tmp_path)
+    seen = []
+    monkeypatch.setattr(
+        rc, "render_group",
+        lambda row, member_rows, raw_root: seen.append(row["group_id"]) or 0)
+    monkeypatch.setattr(rc, "ask", lambda field: rc.FIELDS[field][0])
+    monkeypatch.setattr("builtins.input", lambda prompt="": "")
+
+    assert rc.run_blind_label() == 0
+    stdout = capsys.readouterr().out
+    for leaked in (
+        "stratum", "HIDDEN-ALPHA", "HIDDEN-BETA", "reason",
+        "MODEL-REASON-SENTINEL", "confidence",
+        "MODEL-CONFIDENCE-SENTINEL", "prompt_sha256",
+        "MODEL-FINGERPRINT-SENTINEL", "seed_order",
+    ):
+        assert leaked not in stdout
+    assert seen != ids
+    assert seen != sorted(ids)
+    assert set(seen) == set(ids)
+
+    with label_path.open(encoding="utf-8-sig", newline="") as fh:
+        rows = list(csv.DictReader(fh))
+    assert tuple(rows[0]) == rc.BLIND_LABEL_COLUMNS
+    expected_positions = {gid: i for i, gid in enumerate(rc.blind_order(ids), 1)}
+    assert {row["group_id"]: int(row["seed_order"]) for row in rows} == \
+        expected_positions
 
 
 # --- 檢視模式（--inspect）：只顯示，不問不寫 --------------------------------
@@ -566,7 +683,7 @@ def test_審閱模式沒有挑群的參數():
     """
     source = CARRIER.read_text(encoding="utf-8")
     args = [l for l in source.splitlines() if "add_argument(" in l]
-    assert len(args) == 2, args
+    assert len(args) == 3, args
     flags = source.split("def main(", 1)[1]
     assert '"--only"' not in flags
     assert '"--groups"' not in flags
@@ -576,6 +693,13 @@ def test_inspect_與_screen_互斥():
     """一個判風險、一個看內容，心態相反（見檔頭〈兩個模式的關係〉）。"""
     with pytest.raises(SystemExit):
         rc.main(["--screen", "--inspect", "A008"])
+
+
+def test_盲標與其他模式互斥():
+    with pytest.raises(SystemExit):
+        rc.main(["--blind-label", "--screen"])
+    with pytest.raises(SystemExit):
+        rc.main(["--blind-label", "--inspect", "A008"])
 
 
 def test_inspect_模式在旗標清單裡有說明():

@@ -76,7 +76,8 @@ repo：https://github.com/RAYYO2059/cgu-gateway-usage
 
 三者合計 225。**全體分布只能當開發階段的描述性材料，不能拿來當驗證結論。**
 取得新人工盲標資料前的 taxonomy、提示詞、本地請求設定指紋、評估指標與
-退回門檻已凍結在 `ref/FREEZE_2026-09.md`；舊 FREEZE 不回改。
+退回門檻已凍結在 `ref/FREEZE_2026-09.md`；人工盲標的判讀規則也已在標註
+開始前補入同一份凍結檔，之後不回改，任何新變更另開 FREEZE。
 
 ### 現行分流結果（2026-09-11，225 clean 群）
 
@@ -101,8 +102,9 @@ repo：https://github.com/RAYYO2059/cgu-gateway-usage
 人工盲標樣本已用固定種子 `20260911` 從 225 個 clean 群分層抽出 58 群，
 並排除已看過的 7 群。檔案在 `_rescued_scratchpad/blind_label_sample.csv`，
 只有 `group_id` 與 opaque `stratum`；抽樣程式是
-`src/classify_lite/sample_blind_labels.py`。審閱載具不讀也不顯示任何
-`judge_output` 內容。
+`src/classify_lite/sample_blind_labels.py`。盲標模式只讀其中的 `group_id`，
+再用獨立顯示種子 `2026091101` 打散；不讀、不顯示分層或任何模型判定內容。
+紀錄寫入 `_rescued_scratchpad/blind_labels.csv`，每批 10 群、一次最多 3 批。
 
 ---
 
@@ -600,6 +602,7 @@ python -m src.classify_lite.sample_blind_labels # 固定種子重建 58 群人�
 
 ```bash
 python review_clusters.py --inspect A008,A010   # 只顯示，不問不寫
+python review_clusters.py --blind-label         # 58 群人工盲標：獨立亂序、分批、可續跑
 python review_clusters.py                       # 完整審閱：三軸判定，寫 cluster_review.csv
 python review_clusters.py --screen              # 前綴個資篩檢
 python judge_clusters.py                        # LLM 判定（AI 代理可執行）
@@ -617,7 +620,8 @@ python judge_clusters.py                        # LLM 判定（AI 代理可執�
    成本與規模的缺口就補得起來；若它也套用在 `prompt_text` 之內，
    整個分類路線要重想。
 2. **人工盲標尚未執行。** 58 群樣本已凍結並寫入 repo 外工作檔；由人在
-   `review_clusters.py` 審閱模式中盲標，載具不得接觸模型判定。
+   `review_clusters.py --blind-label` 模式中盲標。載具只從樣本讀 `group_id`，
+   不得接觸模型判定或分層。
 3. **分流值域／判準尚未收斂。** 225 個 clean 群是描述性開發資料，且依
    預先登記的 default 共現門檻判為不可信；修法要等獨立人工盲標結果。
 4. **三軸內容分類未開始**（`invocation`／`role`／`domain`／`status`）。
