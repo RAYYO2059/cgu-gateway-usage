@@ -2898,34 +2898,59 @@ def test_none_的佔比要先扣掉_tool_injected():
     # 字典那一邊也要有，兩邊各自都會被單獨讀到
     rows = {r["代碼"]: r for r in _triage_rows() if r["軸"] == "axis_level"}
     assert "tool_injected" in rows["none"]["邊界說明"]
-# --- tool_injected 的群：整群移出母數，axis_level 不讀（2026-09-09 裁定）----
-#
-# 這一組釘三個地方：純函式的判準、協定的規則、字典的那一列。
-# **三處各自都讀得通**，所以少了任何一處都不會有徵兆。
-
-def test_tool_injected_的_axis_level_只認_none_與_unsure():
-    assert jc.TOOL_INJECTED_OK_LEVELS == frozenset({"none", "unsure"})
-    for lv in ("none", "unsure"):
-        assert not jc.tool_injected_level_anomaly("tool_injected", lv), lv
+def test_三條_must_全部由_AXIS_CONSTRAINTS_自動檢查():
+    """新增 must 不需要在判定器再加一個 disposition 特例。"""
     carrier = jc._load_carrier()
-    實質值 = [v for v in carrier.FIELDS["axis_level"]
-              if v not in jc.TOOL_INJECTED_OK_LEVELS]
-    assert 實質值, "值域裡沒有實質值——這條檢查會變成空真"
-    for lv in 實質值:
-        assert jc.tool_injected_level_anomaly("tool_injected", lv), lv
+    must = [c for c in carrier.AXIS_CONSTRAINTS if c[2] == "must"]
+    assert len(must) == 3
+    for disposition, expected, _, _ in must:
+        assert jc.must_constraint_violation(
+            disposition, expected, carrier.AXIS_CONSTRAINTS) is None
+        for actual in carrier.FIELDS["axis_level"]:
+            violation = jc.must_constraint_violation(
+                disposition, actual, carrier.AXIS_CONSTRAINTS)
+            if actual == expected:
+                assert violation is None
+            else:
+                assert violation == (disposition, expected, actual)
 
 
-def test_異常檢查只認_tool_injected():
-    """**拿同一條去檢查別的 disposition 會把正常判定報成異常。**
-    `service_relay` 配 `not_attributable`、`insufficient` 配
-    `insufficient_data` 都是正確判定，不得進異常清單。
-    """
+def test_unsure_不算符合_must():
+    for disposition, expected, strength, _ in _constraints():
+        if strength == "must":
+            assert expected != "unsure"
+            assert jc.must_constraint_violation(
+                disposition, "unsure", _constraints()) == (
+                    disposition, expected, "unsure")
+
+
+def test_default_偏離不算_must_違反():
     carrier = jc._load_carrier()
-    其他 = [d for d in carrier.FIELDS["disposition"] if d != "tool_injected"]
-    assert 其他
-    for dispo in 其他:
-        for lv in carrier.FIELDS["axis_level"]:
-            assert not jc.tool_injected_level_anomaly(dispo, lv), (dispo, lv)
+    for disposition, _, strength, _ in carrier.AXIS_CONSTRAINTS:
+        if strength == "default":
+            for actual in carrier.FIELDS["axis_level"]:
+                assert jc.must_constraint_violation(
+                    disposition, actual, carrier.AXIS_CONSTRAINTS) is None
+
+
+def test_新增_must_不必改檢查函式():
+    synthetic = (("new_disposition", "new_level", "must", "fixture"),)
+    assert jc.must_constraint_violation(
+        "new_disposition", "wrong", synthetic) == (
+            "new_disposition", "new_level", "wrong")
+    assert jc.must_constraint_violation(
+        "new_disposition", "new_level", synthetic) is None
+
+
+def test_must_機械檢查不硬編任何_disposition():
+    src = Path(jc.__file__).read_text(encoding="utf-8")
+    fn = src.split("def must_constraint_violation(")[1].split("\ndef ")[0]
+    carrier = jc._load_carrier()
+    # unsure 只出現在 docstring 的「不是例外」說明；函式本體沒有拿它特判。
+    for disposition in carrier.FIELDS["disposition"]:
+        if disposition == "unsure":
+            continue
+        assert disposition not in fn
 
 
 def test_異常檢查不進提示詞():
@@ -2933,12 +2958,32 @@ def test_異常檢查不進提示詞():
     輸入，既有判定就全部作廢——而它只是輸出端的一個計數。
     """
     src = jc.__file__ and Path(jc.__file__).read_text(encoding="utf-8")
-    fn = src.split("def tool_injected_level_anomaly(")[1].split("\ndef ")[0]
+    fn = src.split("def must_constraint_violation(")[1].split("\ndef ")[0]
     for forbidden in ("PROMPT_TEMPLATE", "FIELD_HELP", "META_FIELDS",
                       "BLIND_PROBE", "cli_flags", "build_json_schema"):
         assert forbidden not in fn, forbidden
     # 指紋本身也釘住：CURRENT_FINGERPRINT 沒變就代表沒動到那十一項
     assert _real_fingerprint() == CURRENT_FINGERPRINT
+
+
+def test_約束值都能由_json_schema_表達():
+    carrier = jc._load_carrier()
+    schema = jc.build_json_schema(carrier.FIELDS)
+    assert jc.assert_constraints_representable(
+        carrier.AXIS_CONSTRAINTS, schema) is None
+    dispositions = schema["properties"]["disposition"]["enum"]
+    levels = schema["properties"]["axis_level"]["enum"]
+    for disposition, level, _, _ in carrier.AXIS_CONSTRAINTS:
+        assert disposition in dispositions
+        assert level in levels
+
+
+def test_main_使用同一份約束做_schema_與輸出檢查():
+    src = Path(jc.__file__).read_text(encoding="utf-8")
+    main = src.split("def main(", 1)[1]
+    assert "assert_constraints_representable(carrier.AXIS_CONSTRAINTS, schema)" in main
+    assert "must_constraint_violation(" in main
+    assert "carrier.AXIS_CONSTRAINTS" in main
 
 
 def test_協定寫了_tool_injected_不加值的理由():
@@ -3152,6 +3197,7 @@ def test_協定把_must_與_default_的檢查分開():
     sec = _cooccur_section()
     assert "指令遵循" in sec and "一致性" in sec
     assert "違反即異常" in sec
+    assert "`unsure` **不算符合**" in sec
     assert "不算百分比" in sec
     # 違反的意思要寫明：提示詞問題，不是判定問題
     assert "提示詞的問題" in sec

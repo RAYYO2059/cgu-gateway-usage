@@ -57,32 +57,33 @@ repo：https://github.com/RAYYO2059/cgu-gateway-usage
 
 - 現行檔是 `judge_output.e13f9738.csv`：225 個 clean 群各一列，完整指紋
   `e13f9738fba32a8f5167807157718758954dc2e2f1304392bdf86b3b7dd97114`。
-  這是唯一可當現行全群分流結果的檔案。
+  這是唯一可當現行全群**描述性模型結果**的檔案；它沒有獨立參考標籤，
+  不得寫成已驗證分類。分母與但書見 `docs/INDEX.md`。
 - `79635e2b…`、`a0d19daa…`、`a2dc7b11…`、`83086cd2…` 全部是舊指紋。
   它們只可當歷史量測或配對材料；**不可接到現行檔後面補列，也不可把舊值
   當成現行結果。**
 - 226 群裡另有 1 群 `flagged`，依前綴篩檢閘門不送判定器。所以「全數有
   交代」是 **225 群判定 + 1 群排除**，不是 226 列判定。
 
-**(c) 225 群雖然已有同指紋判定，仍不得混成一個驗證集。**
+**(c) 225 群雖然已有同指紋判定，不是驗證集。**
 
 現行檔必須按既定來源拆成三個 cohort：
 
-- **主 cohort 118 群**：第一次用現行字典判定時尚未判過，當時沒有選擇偏誤；
-  這次使用已經把它用掉，下一次改字典時不再是新的乾淨驗證集。
+- **118 群**：已三度用於調參，現在是開發資料，不是驗證集。
 - **次 cohort 84 群**：有舊指紋的配對判定，只能分開報。
 - **A001–A023 共 23 群**：導出材料／測試台，其中七群更帶有模型選擇資訊；
   盲性不可恢復，只能當判準盤點材料。
 
-三者合計 225。**全體分布可用來看值域有沒有正例、判準在哪裡失效，不能拿來
-取代 118 群的乾淨驗證結論。** 現行 118 群裡 `batch_project ↔ all_three`
-兩方向皆為 101/105（96.2%，通過）；`user_envelope ↔ invocation_only` 兩邊
-分母都只有 9，依預先登記規則只報 5/9、不算百分比。
+三者合計 225。**全體分布只能當開發階段的描述性材料，不能拿來當驗證結論。**
+取得新人工盲標資料前的 taxonomy、提示詞、本地請求設定指紋、評估指標與
+退回門檻已凍結在 `ref/FREEZE_2026-09.md`；舊 FREEZE 不回改。
 
 ### 現行分流結果（2026-09-11，225 clean 群）
 
 `disposition`：`batch_project` 163、`user_envelope` 37、`tool_injected` 13、
-`service_relay` 11、`insufficient` 1。三條 must 約束均 0 違反。
+`service_relay` 11、`insufficient` 1。三條 must 約束均 0 違反。default 兩組
+各至少有一個方向低於 90%，依預先登記門檻，**這一批判定不可信**；不得用
+事後解釋改變這個結論。
 
 這批結果**沒有讓現行判準自行成立**：
 
@@ -96,6 +97,12 @@ repo：https://github.com/RAYYO2059/cgu-gateway-usage
   （85.3%），反向 139/146（95.2%）；`user_envelope → invocation_only` 30/37
   （81.1%），反向 30/54（55.6%）。依預先登記門檻，前者各有一個方向、
   後者兩個方向低於 90%。**這裡只記結果；新的值域與判準尚未裁定。**
+
+人工盲標樣本已用固定種子 `20260911` 從 225 個 clean 群分層抽出 58 群，
+並排除已看過的 7 群。檔案在 `_rescued_scratchpad/blind_label_sample.csv`，
+只有 `group_id` 與 opaque `stratum`；抽樣程式是
+`src/classify_lite/sample_blind_labels.py`。審閱載具不讀也不顯示任何
+`judge_output` 內容。
 
 ---
 
@@ -584,9 +591,10 @@ python -m src.run metrics --line clean --publish  # 驗收用：clean 逐位元�
 
 python -m src.classify_lite.markers             # 分類前置：掃結構標記（約 3.5 分鐘）
 python -m src.classify_lite.prefilter           # 分類前置：套四條規則（秒級）
+python -m src.classify_lite.sample_blind_labels # 固定種子重建 58 群人工盲標樣本
 ```
 
-最後兩支不在主管線，單獨執行。詳見 `docs/RUNBOOK_lite.md` 情境三。
+最後三支不在主管線，單獨執行。詳見 `docs/RUNBOOK_lite.md` 情境三。
 
 群集判定的指令在 `_rescued_scratchpad/`，由**人**執行（見〈絕對禁止〉第 2 條）：
 
@@ -608,24 +616,26 @@ python judge_clusters.py                        # LLM 判定（AI 代理可執�
    **最優先，因為答案可能改變後面的優先序**——若被排除的記錄拿得到中繼資料，
    成本與規模的缺口就補得起來；若它也套用在 `prompt_text` 之內，
    整個分類路線要重想。
-2. **分流值域／判準尚未收斂。** 225 個 clean 群已跑完，結果明確撞到三條
-   現行判準；只攤開結果，尚未裁定修法。完整數字見〈現行分流結果〉。
-3. **三軸內容分類未開始**（`invocation`／`role`／`domain`／`status`）。
-4. **84 群雖已有現行與舊指紋配對，跨指紋變動尚未量。** 兩次之間同時改了
+2. **人工盲標尚未執行。** 58 群樣本已凍結並寫入 repo 外工作檔；由人在
+   `review_clusters.py` 審閱模式中盲標，載具不得接觸模型判定。
+3. **分流值域／判準尚未收斂。** 225 個 clean 群是描述性開發資料，且依
+   預先登記的 default 共現門檻判為不可信；修法要等獨立人工盲標結果。
+4. **三軸內容分類未開始**（`invocation`／`role`／`domain`／`status`）。
+5. **84 群雖已有現行與舊指紋配對，跨指紋變動尚未量。** 兩次之間同時改了
    不只一件事，所以只能當加值描述，不能解讀成單一改動的效果。
-5. **全 225 群的生產探針失敗率無法從產物重建。** 判定 CSV 不存探針事件，
+6. **全 225 群的生產探針失敗率無法從產物重建。** 判定 CSV 不存探針事件，
    先前批次也沒有完整持久化日誌；2026-09-11 最後 31 群的有效執行是 0/2
    失敗。若之後要報全批率，必須先讓執行器把每次探針結果另存安全計數。
-6. **`docs/OVERVIEW.md` 有五件待處理，必須一起改不可單獨更新**
+7. **`docs/OVERVIEW.md` 有五件待處理，必須一起改不可單獨更新**
    （部分更新比全部過期更難追）。清單在 `DESIGN_NOTES`；
    第五件要等上游回覆才能定稿。
-7. **有 commit 未 push，tag `docs-lite-2026-08` 也未推。**
+8. **有 commit 未 push，tag `docs-lite-2026-08` 也未推。**
    數目以 `git log --oneline origin/main..HEAD` 為準，這裡不記。
-8. **`DESIGN_NOTES` 與 `CLASSIFICATION_NOTES` 不在 repo 裡**——換機器要另外帶，
+9. **`DESIGN_NOTES` 與 `CLASSIFICATION_NOTES` 不在 repo 裡**——換機器要另外帶，
    連同整個 `_rescued_scratchpad/`。
-9. **`pricing.py` 保留的舊值對照無法重現**——需同時回退價目表，但沒有記錄
+10. **`pricing.py` 保留的舊值對照無法重現**——需同時回退價目表，但沒有記錄
    該回退到哪個版本（刻意不補 tag，那兩個數字的用途是對比不是重跑）。
-10. **兩條 relay 標記 100% 共現的觀察沒有自動檢查**，靠 RUNBOOK 提醒。
+11. **兩條 relay 標記 100% 共現的觀察沒有自動檢查**，靠 RUNBOOK 提醒。
 
 ---
 
@@ -633,6 +643,7 @@ python judge_clusters.py                        # LLM 判定（AI 代理可執�
 
 | 內容 | 位置 |
 | --- | --- |
+| 取得新驗證資料前的凍結版本 | `ref/FREEZE_2026-09.md` |
 | 凍結座標、標註規則、退回門檻、判讀規則 | `ref/annotation_protocol.md` |
 | 上游過濾了什麼（影響規模與成本） | `docs/UPSTREAM_FILTER.md`（公開） |
 | 通用工程規則（可外帶到別的專案） | `docs/ENGINEERING_NOTES.md`（公開） |
