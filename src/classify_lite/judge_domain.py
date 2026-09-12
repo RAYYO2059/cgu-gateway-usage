@@ -16,6 +16,7 @@ import hashlib
 import json
 import os
 import random
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -189,6 +190,7 @@ def prompt_fingerprint(domain_block: str, schema: dict,
                        content_cap: int = CONTENT_CAP) -> str:
     payload = {
         "runtime": "claude-code-stream-json",
+        "claude_executable": claude_executable(),
         "model": MODEL,
         "effort": EFFORT,
         "content_cap": content_cap,
@@ -356,8 +358,18 @@ def isolated_workdir() -> Path:
     return path
 
 
+def claude_executable() -> str:
+    """解析可從隔離 cwd 直接啟動的 Claude；Windows 明確使用 .cmd。"""
+    candidates = ("claude.cmd", "claude") if os.name == "nt" else ("claude",)
+    for candidate in candidates:
+        resolved = shutil.which(candidate)
+        if resolved:
+            return str(Path(resolved).resolve())
+    raise FileNotFoundError("找不到可從隔離工作目錄啟動的 Claude CLI")
+
+
 def run_claude(prompt: str, schema: dict, cwd: Path) -> tuple[object, list[str], dict[str, object]]:
-    command = ["claude", *cli_flags(schema)]
+    command = [claude_executable(), *cli_flags(schema)]
     result = subprocess.run(
         command, input=prompt, cwd=str(cwd), capture_output=True,
         text=True, encoding="utf-8", errors="replace", timeout=CALL_TIMEOUT_S,

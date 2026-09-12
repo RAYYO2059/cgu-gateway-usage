@@ -38,6 +38,13 @@ def test_cli_機械關閉工具與專案設定():
     assert flags[flags.index("--output-format") + 1] == "stream-json"
 
 
+def test_claude_執行檔可從隔離目錄直接解析():
+    executable = Path(judge.claude_executable())
+    assert executable.is_absolute() and executable.exists()
+    if sys.platform == "win32":
+        assert executable.suffix.lower() == ".cmd"
+
+
 def test_stream_parser_記錄工具事件類型():
     events = [
         {"type": "assistant", "message": {"content": [
