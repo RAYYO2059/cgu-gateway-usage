@@ -53,6 +53,7 @@ DOMAIN_VALUES = (
     "general", "unknown", "not_applicable",
 )
 CONFIDENCE_VALUES = ("high", "medium", "low")
+INTERNAL_TOOL_EVENTS = {"StructuredOutput"}
 
 OUTPUT_COLUMNS = (
     "prompt_text_sha256", "domain", "named_third_party", "confidence",
@@ -246,7 +247,11 @@ def parse_stream(stdout: str) -> tuple[object, list[str], dict[str, object]]:
     for event in events:
         for obj in _walk_objects(event):
             if obj.get("type") == "tool_use":
-                tools.append(str(obj.get("name") or "unknown"))
+                name = str(obj.get("name") or "unknown")
+                # Claude CLI 用這個內建事件交付 --json-schema 的結果；它不是
+                # 模型可用來讀檔或連網的外部工具。其餘 tool_use 一律保留。
+                if name not in INTERNAL_TOOL_EVENTS:
+                    tools.append(name)
 
     final = next((e for e in reversed(events) if e.get("type") == "result"), None)
     if final is None:

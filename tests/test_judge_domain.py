@@ -66,6 +66,22 @@ def test_stream_parser_記錄工具事件類型():
     assert usage["prompt_tokens_total"] == 10
 
 
+def test_stream_parser_只排除_cli內建的_structured_output():
+    events = [
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "StructuredOutput", "input": {
+                "domain": "general", "named_third_party": False,
+                "confidence": "high"}},
+            {"type": "tool_use", "name": "Read", "input": {"path": "x"}},
+        ]}},
+        {"type": "result", "is_error": False, "structured_output": {
+            "domain": "general", "named_third_party": False,
+            "confidence": "high"}, "usage": {}},
+    ]
+    _, tools, _ = judge.parse_stream("\n".join(json.dumps(e) for e in events))
+    assert tools == ["Read"]
+
+
 def test_output_guard_擋同一次與跨_write_的內容():
     secret = "這是一段不應該出現在輸出的逐筆敏感內容而且長度足夠"
     guard = judge.OutputGuard(io.StringIO(), n=4)
