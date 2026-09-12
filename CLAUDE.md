@@ -8,7 +8,7 @@
 >
 > 內容有變動就當下修。帶著過期的基準往下做，錯誤會擴散到之後每個決定。
 >
-> 最後更新：2026-09-11
+> 最後更新：2026-09-12
 
 ---
 
@@ -34,7 +34,7 @@ repo：https://github.com/RAYYO2059/cgu-gateway-usage
 | --- | --- |
 | 誰在用 | 完成。最小可靠粒度是**學院**，不是個人 |
 | 花多少 | 完成。US$2,749.32，牌價等值非帳單，**且非全量**（見下） |
-| 做什麼 | **未完成**。225 個 clean 群的分流判定已跑完；值域／判準尚未收斂，內容分類未開始 |
+| 做什麼 | **未完成**。分流層已結案；domain 逐筆線已抽樣並備妥 Opus 判定器，但尚未執行任何 domain 判定 |
 
 `docs/OVERVIEW.md` 是主要交付物，七節散文全部寫完、數字全部逐項查證過。
 
@@ -50,8 +50,8 @@ repo：https://github.com/RAYYO2059/cgu-gateway-usage
 - `docs/CLASSIFICATION_NOTES.md` 裡那 150 列逐筆觀察**仍然在**，內容也仍然
   有參考價值，**但它的編號對應一個已不存在的抽樣**，與任何現行產物都對不上。
   拿它去核對現在的群編號會得到一組看起來合理的假對應。
-- **現行路線不是逐筆抽樣，是群集判定**：把相異內容聚成群，判「這一群要不要
-  進分類母數、能判到哪一層」，再對留下來的群做內容分類。
+- 群集判定是已結案的**分流層**材料，不再沿它做 domain。現行 domain 路線是從
+  17,365 個需送分類器的相異內容做**逐筆分層抽樣**；不要把群前綴當成內容領域。
 
 **(b) 不要把不同提示詞指紋的 `judge_output*.csv` 當成同一批。**
 
@@ -118,6 +118,19 @@ Codex 的 58 群交叉判定已在 repo 外的 `codex_blind_2026-09/` 完成，�
 執行器是 `src/classify_lite/judge_codex_blind.py`；Codex 內容指紋與執行指紋記在
 隔離目錄的 `prompt_manifest.json`。這仍是開發階段的交叉判定材料：Ray 只標完
 30/58，且尚未完成間隔至少 3 天的 15 群盲重標，所以不得把它寫成已驗證結果。
+
+依 2026-09-12 的工作指示，分流層已結案。本輪指示引用
+`CLASSIFICATION_LIMITS.md`，但該檔目前不在 repo、`docs/`、父目錄或 git 歷史；
+不得假裝已讀過，結案理由要等原檔補回才能引用。
+
+Domain 逐筆樣本已用固定種子 `2026091102` 從 17,365 個需送分類器的相異內容
+抽出 600 筆，分層是 `unit_type × [≤251, 252–986, 987–4799, ≥4800]`，每層
+先保底 15，再按母體比例分配剩餘；檔案在 `_rescued_scratchpad/domain_sample.csv`，
+不含明文。`src/classify_lite/judge_domain.py` 是 Opus 判定器；只可先跑
+`--dry-run`，尚未授權執行判定。它最多送出每筆開頭 1,200 字元，輸出不含
+`reason` 或任何文字欄，第三人標記另建 sha256 + source_path 索引。Domain 的
+Opus/Codex 交叉一致率門檻已在判定前凍結於 `ref/FREEZE_2026-09.md`：600 筆固定
+分母，`>= 0.75` 才繼續，否則不進報告。
 
 ---
 
@@ -301,6 +314,9 @@ pytest 全過（不記具體數字，以實際輸出為準）
 | `judge_output.83086cd2.csv` | 118 列，未帶隱藏上下文欄的舊指紋，**作廢**。其群編號集合用來界定主 cohort |
 | `judge_output.e13f9738.csv` | **現行結果**：225 個 clean 群各一列；1 個 flagged 群不在其中 |
 | `pipeline_groups.csv` | 226 列，`group_id` → `pipeline_id`。**材料，不是結論**——多 uid 的 137 群併法未定，`pipeline_id` 留空 |
+| `domain_sample.csv` | Domain 逐筆分層樣本 600 列；只含 sha256、來源路徑與抽樣中繼資料，不含明文 |
+| `judge_domain_output.csv` | Domain 的 Opus 判定結果；尚未執行，因此目前不存在 |
+| `domain_named_third_party.csv` | `named_third_party=true` 的 sha256 + source_path 索引；判定後由程式重建 |
 
 ---
 
@@ -607,6 +623,8 @@ python -m src.run metrics --line clean --publish  # 驗收用：clean 逐位元�
 python -m src.classify_lite.markers             # 分類前置：掃結構標記（約 3.5 分鐘）
 python -m src.classify_lite.prefilter           # 分類前置：套四條規則（秒級）
 python -m src.classify_lite.sample_blind_labels # 固定種子重建 58 群人工盲標樣本
+python -m src.classify_lite.sample_domain       # 固定種子重建 600 筆 domain 樣本
+python -m src.classify_lite.judge_domain --dry-run  # 只驗樣本／指紋／截斷，不判定
 ```
 
 最後三支不在主管線，單獨執行。詳見 `docs/RUNBOOK_lite.md` 情境三。
@@ -632,12 +650,12 @@ python judge_clusters.py                        # LLM 判定（AI 代理可執�
    **最優先，因為答案可能改變後面的優先序**——若被排除的記錄拿得到中繼資料，
    成本與規模的缺口就補得起來；若它也套用在 `prompt_text` 之內，
    整個分類路線要重想。
-2. **人工盲標尚未執行。** 58 群樣本已凍結並寫入 repo 外工作檔；由人在
-   `review_clusters.py --blind-label` 模式中盲標。載具只從樣本讀 `group_id`，
-   不得接觸模型判定或分層。
-3. **分流值域／判準尚未收斂。** 225 個 clean 群是描述性開發資料，且依
-   預先登記的 default 共現門檻判為不可信；修法要等獨立人工盲標結果。
-4. **三軸內容分類未開始**（`invocation`／`role`／`domain`／`status`）。
+2. **Domain 字典尚待人工重寫。** 現行八值會逐字進判定提示詞；不要由代理
+   自行修改 `ref/label_dictionary.csv`，也不要在字典定稿前執行判定。
+3. **Domain 的 Opus 與 Codex 判定都尚未執行。** 600 筆樣本已抽出；目前只有
+   Opus 側 `judge_domain.py`，Codex 側仍須沿用既有 bwrap 機械隔離另備執行器。
+4. **Domain 交叉一致率尚未量。** 固定分母 600、門檻 0.75 已預先凍結；
+   `named_third_party` 與 `confidence` 不進通過條件。
 5. **84 群雖已有現行與舊指紋配對，跨指紋變動尚未量。** 兩次之間同時改了
    不只一件事，所以只能當加值描述，不能解讀成單一改動的效果。
 6. **全 225 群的生產探針失敗率無法從產物重建。** 判定 CSV 不存探針事件，
