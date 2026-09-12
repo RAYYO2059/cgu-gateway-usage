@@ -143,3 +143,12 @@ def test_domain_沒有_must_約束檢查():
     source = Path(judge.__file__).read_text(encoding="utf-8")
     assert "must_constraint_violation" not in source
     assert "assert_constraints_representable" not in source
+
+
+def test_domain_提示詞含例子與邊界但不含字典檔頭():
+    rows = judge.load_domain_rows()
+    rendered = judge.render_domain(rows)
+    assert all(row["具體例子"] in rendered for row in rows)
+    assert all(row["邊界說明"] in rendered for row in rows)
+    assert "可能的預設桶" not in rendered
+    assert "uid≥10" not in rendered

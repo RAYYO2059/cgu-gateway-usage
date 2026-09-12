@@ -178,13 +178,21 @@ def _fingerprint_flags(flags: list[str]) -> list[str]:
     return kept
 
 
-def prompt_fingerprint(domain_block: str, schema: dict) -> str:
+def prompt_template(content_cap: int = CONTENT_CAP) -> str:
+    """保留 1,200 版逐位元組相同，只替換校準所需的上限數字。"""
+    if content_cap <= 0:
+        raise ValueError("內容上限必須大於零")
+    return PROMPT_TEMPLATE.replace("1,200 字元上限", f"{content_cap:,} 字元上限")
+
+
+def prompt_fingerprint(domain_block: str, schema: dict,
+                       content_cap: int = CONTENT_CAP) -> str:
     payload = {
         "runtime": "claude-code-stream-json",
         "model": MODEL,
         "effort": EFFORT,
-        "content_cap": CONTENT_CAP,
-        "prompt_template": PROMPT_TEMPLATE,
+        "content_cap": content_cap,
+        "prompt_template": prompt_template(content_cap),
         "domain_block": domain_block,
         "system_prompt": SYSTEM_PROMPT,
         "blind_probe_prompt": BLIND_PROBE_PROMPT,
@@ -197,13 +205,14 @@ def prompt_fingerprint(domain_block: str, schema: dict) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def build_prompt(content: str, original_length: int, domain_block: str) -> str:
-    sent = content[:CONTENT_CAP]
-    return PROMPT_TEMPLATE.format(
+def build_prompt(content: str, original_length: int, domain_block: str,
+                 content_cap: int = CONTENT_CAP) -> str:
+    sent = content[:content_cap]
+    return prompt_template(content_cap).format(
         domain_block=domain_block,
         original_length=original_length,
         sent_length=len(sent),
-        truncated="是" if original_length > CONTENT_CAP else "否",
+        truncated="是" if original_length > content_cap else "否",
         content=sent,
     )
 
@@ -475,10 +484,11 @@ def rebuild_third_party_index(output_path: Path, sample: pd.DataFrame,
     return len(rows)
 
 
-def truncation_profile(sample: pd.DataFrame) -> dict[str, object]:
+def truncation_profile(sample: pd.DataFrame,
+                       content_cap: int = CONTENT_CAP) -> dict[str, object]:
     lengths = sample["prompt_text_len"].astype(int)
-    truncated = lengths > CONTENT_CAP
-    retained = (CONTENT_CAP / lengths[truncated]).clip(upper=1.0)
+    truncated = lengths > content_cap
+    retained = (content_cap / lengths[truncated]).clip(upper=1.0)
     return {
         "count": int(truncated.sum()),
         "share": float(truncated.mean()),

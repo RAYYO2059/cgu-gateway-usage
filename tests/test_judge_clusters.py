@@ -2629,12 +2629,26 @@ def _triage_rows():
 
 def test_字典的層欄只有三種值而且說明列在最前面():
     rows = _dict_rows()
-    assert {r["層"] for r in rows} == {"（層別說明）", "分類法", "分流判準"}
+    assert {r["層"] for r in rows} == {
+        "（層別說明）", "（字典檔頭）", "分類法", "分流判準"}
     assert [r["層"] for r in rows[:2]] == ["（層別說明）", "（層別說明）"]
     assert {r["軸"] for r in rows[:2]} == {"分類法", "分流判準"}
     # 說明列要講出兩層的分別，不只是列出軸名
     text = " ".join(r["一句話定義"] + r["邊界說明"] for r in rows[:2])
     assert "判定器看不到" in text and "FIELD_HELP" in text
+
+
+def test_domain_事前拆分規則在字典檔頭且八值判準處置全空():
+    rows = _dict_rows()
+    headers = [r for r in rows if r["層"] == "（字典檔頭）" and r["軸"] == "domain"]
+    assert len(headers) == 1
+    text = headers[0]["一句話定義"] + headers[0]["邊界說明"]
+    for token in ("uid≥10", "600 筆的 30%", "180 筆", "低於 10 筆",
+                  "2 組以上遮罩帳號", "重標全部 600 筆", "不可只重標該類"):
+        assert token in text
+    domain = [r for r in rows if r["層"] == "分類法" and r["軸"] == "domain"]
+    assert len(domain) == 8
+    assert all(r["判準"] == "" and r["處置"] == "" for r in domain)
 
 
 def test_分類法那一層還是原本四個軸():

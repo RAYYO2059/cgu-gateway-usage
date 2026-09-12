@@ -11,6 +11,7 @@
 | --- | --- | --- |
 | [RESULTS.md](RESULTS.md) | 1.8 天、9,937 筆 | 一個 turn 內部發生了什麼 |
 | [RESULTS_lite.md](RESULTS_lite.md) | 24 天、120,520 筆、357 個 uid（275 人） | 誰在用、花了多少 |
+| [CLASSIFICATION_LIMITS.md](CLASSIFICATION_LIMITS.md) | 225 群描述性分流、58 群跨模型判定、30 群人工標註 | 「做什麼」目前不能往下推到哪裡，以及為什麼 |
 
 **這不是舊版與新版的關係。** 兩批資料的 schema、期間、母體都不同，各自回答
 的問題也不同，而且**互相支撐**：
