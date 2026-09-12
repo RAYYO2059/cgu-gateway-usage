@@ -174,4 +174,5 @@ def test_domain_提示詞含例子與邊界但不含字典檔頭():
     assert all(row["具體例子"] in rendered for row in rows)
     assert all(row["邊界說明"] in rendered for row in rows)
     assert "可能的預設桶" not in rendered
+    assert "confidence=low" not in rendered
     assert "uid≥10" not in rendered
