@@ -119,9 +119,10 @@ Codex 的 58 群交叉判定已在 repo 外的 `codex_blind_2026-09/` 完成，�
 隔離目錄的 `prompt_manifest.json`。這仍是開發階段的交叉判定材料：Ray 只標完
 30/58，且尚未完成間隔至少 3 天的 15 群盲重標，所以不得把它寫成已驗證結果。
 
-依 2026-09-12 的工作指示，分流層已結案。本輪指示引用
-`CLASSIFICATION_LIMITS.md`，但該檔目前不在 repo、`docs/`、父目錄或 git 歷史；
-不得假裝已讀過，結案理由要等原檔補回才能引用。
+分流層已結案，證據與交付界線在 `docs/CLASSIFICATION_LIMITS.md`。該檔把
+58 群兩模型 `disposition` 一致率 53.4%、中繼資料不可分反例、現行判準未被
+模型實際使用，以及 30 群人工標註的限制分開記錄；分流結果只作探索性材料，
+不進報告結論。
 
 Domain 逐筆樣本已用固定種子 `2026091102` 從 17,365 個需送分類器的相異內容
 抽出 600 筆，分層是 `unit_type × [≤251, 252–986, 987–4799, ≥4800]`，每層
@@ -131,6 +132,13 @@ Domain 逐筆樣本已用固定種子 `2026091102` 從 17,365 個需送分類器
 `reason` 或任何文字欄，第三人標記另建 sha256 + source_path 索引。Domain 的
 Opus/Codex 交叉一致率門檻已在判定前凍結於 `ref/FREEZE_2026-09.md`：600 筆固定
 分母，`>= 0.75` 才繼續，否則不進報告。
+
+正式執行前已另抽 50 筆做內容上限校準，1,200 與 4,000 字元各獨立判一次；
+結果不併入正式 600 筆。全體改判 4/50；原先會截斷者 1/25、原先不截斷者
+3/25。後一臂內容逐位元組相同，是同期重跑／提示數字變動底線；沒有量到增加
+內容可改善穩定度，故正式上限維持 1,200。100 次皆成功、外部工具事件 0，
+估算成本合計 US$4.394604（不併入資料集成本）。完整限制與兩側指紋見
+`docs/DOMAIN_CAP_CALIBRATION.md`；正式 `judge_domain_output.csv` 仍不存在。
 
 ---
 
@@ -315,6 +323,8 @@ pytest 全過（不記具體數字，以實際輸出為準）
 | `judge_output.e13f9738.csv` | **現行結果**：225 個 clean 群各一列；1 個 flagged 群不在其中 |
 | `pipeline_groups.csv` | 226 列，`group_id` → `pipeline_id`。**材料，不是結論**——多 uid 的 137 群併法未定，`pipeline_id` 留空 |
 | `domain_sample.csv` | Domain 逐筆分層樣本 600 列；只含 sha256、來源路徑與抽樣中繼資料，不含明文 |
+| `domain_cap_calibration_sample.csv` | 從 600 筆另抽的 50 筆上限校準樣本；1,200 截斷／未截斷各 25，不含明文 |
+| `domain_cap_calibration.1200.csv`、`domain_cap_calibration.4000.csv` | 同 50 筆各一次的校準結果；不併入正式判定輸出 |
 | `judge_domain_output.csv` | Domain 的 Opus 判定結果；尚未執行，因此目前不存在 |
 | `domain_named_third_party.csv` | `named_third_party=true` 的 sha256 + source_path 索引；判定後由程式重建 |
 
@@ -652,8 +662,9 @@ python judge_clusters.py                        # LLM 判定（AI 代理可執�
    整個分類路線要重想。
 2. **Domain 字典尚待人工重寫。** 現行八值會逐字進判定提示詞；不要由代理
    自行修改 `ref/label_dictionary.csv`，也不要在字典定稿前執行判定。
-3. **Domain 的 Opus 與 Codex 判定都尚未執行。** 600 筆樣本已抽出；目前只有
-   Opus 側 `judge_domain.py`，Codex 側仍須沿用既有 bwrap 機械隔離另備執行器。
+3. **Domain 的正式 Opus 與 Codex 判定都尚未執行。** 600 筆樣本已抽出；
+   50 筆的 Opus 上限校準不算正式輸出。Codex 側仍須沿用既有 bwrap 機械隔離
+   另備執行器。
 4. **Domain 交叉一致率尚未量。** 固定分母 600、門檻 0.75 已預先凍結；
    `named_third_party` 與 `confidence` 不進通過條件。
 5. **84 群雖已有現行與舊指紋配對，跨指紋變動尚未量。** 兩次之間同時改了

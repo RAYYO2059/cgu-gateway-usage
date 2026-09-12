@@ -13,6 +13,7 @@ sys.path.insert(0, str(REPO))
 from src.classify_lite import calibrate_domain_cap as calibrate
 from src.classify_lite import judge_domain as judge
 from src.classify_lite import sample_domain_cap_calibration as sampler
+from src.classify_lite import summarize_domain_cap_calibration as summary
 
 
 def _fake_source() -> pd.DataFrame:
@@ -60,6 +61,7 @@ def test校準輸出不含明文且正式輸出路徑完全分開(tmp_path):
 
 
 def test_1200提示詞逐位元組不變而4000明列新上限():
+    assert judge.CONTENT_CAP == 1200
     rows = judge.load_domain_rows()
     domain_block = judge.render_domain(rows)
     content = "測試" * 700
@@ -82,3 +84,21 @@ def test_1200提示詞逐位元組不變而4000明列新上限():
 def test每筆上限先後順序固定且兩種都會先出現():
     orders = {calibrate.cap_order(f"{i:064x}") for i in range(30)}
     assert orders == {(1200, 4000), (4000, 1200)}
+
+
+def test校準彙總只回傳聚合且分開兩臂():
+    sample, _ = sampler.draw(_fake_source(), seed=19)
+    base = pd.DataFrame({
+        "prompt_text_sha256": sample["prompt_text_sha256"],
+        "domain": ["general"] * 50,
+        "total_cost_usd": ["0.01"] * 50,
+        "tool_events": ["[]"] * 50,
+    })
+    longer = base.copy()
+    longer.iloc[:4, longer.columns.get_loc("domain")] = "software"
+    result = summary.summarize(sample, base, longer)
+    assert result["domain_changed"] == 4
+    assert result["truncated_at_1200"]["n"] == 25
+    assert result["not_truncated_at_1200"]["n"] == 25
+    assert result["external_tool_events"] == 0
+    assert "prompt_text_sha256" not in result
