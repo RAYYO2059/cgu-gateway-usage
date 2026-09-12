@@ -40,3 +40,5 @@ def test盲化目錄不複製樣本或原始內容(tmp_path, monkeypatch):
     assert manifest["content_cap"] == 1200
     assert manifest["sample_rows"] == 600
     assert "prompt_text" not in json.dumps(manifest, ensure_ascii=False)
+    assert b"\r\n" not in prep.PROFILE.read_bytes()
+    assert b"\r\n" not in prep.WRAPPER.read_bytes()

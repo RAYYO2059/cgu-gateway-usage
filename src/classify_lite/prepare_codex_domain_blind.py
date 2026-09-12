@@ -108,8 +108,8 @@ def prepare() -> dict[str, object]:
     }
     SCHEMA.write_text(
         json.dumps(schema, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    PROBE.write_text(PROBE_TEXT, encoding="utf-8")
-    PROFILE.write_text(codex_base.PROFILE_TEXT, encoding="utf-8")
+    PROBE.write_text(PROBE_TEXT, encoding="utf-8", newline="\n")
+    PROFILE.write_text(codex_base.PROFILE_TEXT, encoding="utf-8", newline="\n")
     WRAPPER.write_text(wrapper, encoding="utf-8", newline="\n")
     MANIFEST.write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
