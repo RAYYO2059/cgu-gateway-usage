@@ -24,6 +24,11 @@ def test_codex輸出沒有內容或reason欄():
     assert "reason" not in runner.OUTPUT_COLUMNS
 
 
+def test連續三次失敗會停止但兩次不會():
+    assert not runner.too_many_consecutive_failures(2)
+    assert runner.too_many_consecutive_failures(3)
+
+
 def test盲化目錄不複製樣本或原始內容(tmp_path, monkeypatch):
     monkeypatch.setattr(prep, "BLIND_ROOT", tmp_path / "blind")
     monkeypatch.setattr(prep, "SCHEMA", prep.BLIND_ROOT / "json_schema.json")

@@ -24,6 +24,12 @@ OUTPUT_COLUMNS = (
 )
 FORBIDDEN_COLUMNS = opus.FORBIDDEN_OUTPUT_COLUMNS
 MAX_RETRIES = 3
+MAX_CONSECUTIVE_FAILURES = 3
+
+
+def too_many_consecutive_failures(count: int) -> bool:
+    """避免額度或服務失效時把所有待判項目重試一遍。"""
+    return count >= MAX_CONSECUTIVE_FAILURES
 
 
 def verify_inputs() -> dict[str, object]:
@@ -164,6 +170,8 @@ def run(*, retries: int = MAX_RETRIES) -> dict[str, object]:
     print(f"todo_items={len(todo)}")
     failures: list[str] = []
     usage_limited = False
+    stalled = False
+    consecutive_failures = 0
     root = config.lite_raw_dir()
     guard = opus.install_output_guard()
     try:
@@ -175,6 +183,7 @@ def run(*, retries: int = MAX_RETRIES) -> dict[str, object]:
                 prompt = opus.build_prompt(
                     content, len(content), str(state["domain_block"]))
                 judged = tools = None
+                error_type: str | None = None
                 started = time.monotonic()
                 for attempt in range(1, retries + 1):
                     try:
@@ -182,21 +191,30 @@ def run(*, retries: int = MAX_RETRIES) -> dict[str, object]:
                         judged = parse_judgement(text)
                         break
                     except codex_base.CodexCallError as exc:
+                        error_type = type(exc).__name__
                         if exc.usage_limit:
                             usage_limited = True
                             break
                         if attempt < retries:
                             time.sleep(min(2 ** attempt, 8))
                     except (ValueError, json.JSONDecodeError):
+                        error_type = "ValueError"
                         if attempt < retries:
                             time.sleep(min(2 ** attempt, 8))
                 elapsed = time.monotonic() - started
             except SystemExit:
                 raise
-            except Exception:
+            except Exception as exc:
+                error_type = type(exc).__name__
                 failures.append(sha)
-                print(f"progress={len(existing)}/{len(sample)} item={sha[:12]}… status=failed")
+                consecutive_failures += 1
+                print(f"progress={len(existing)}/{len(sample)} item={sha[:12]}… "
+                      f"status=failed error={error_type}")
                 guard.clear()
+                if too_many_consecutive_failures(consecutive_failures):
+                    stalled = True
+                    print("consecutive_failures=3 stopping=true")
+                    break
                 continue
             del content, prompt
             guard.clear()
@@ -205,8 +223,15 @@ def run(*, retries: int = MAX_RETRIES) -> dict[str, object]:
                 break
             if judged is None or tools is None:
                 failures.append(sha)
-                print(f"progress={len(existing)}/{len(sample)} item={sha[:12]}… status=failed")
+                consecutive_failures += 1
+                print(f"progress={len(existing)}/{len(sample)} item={sha[:12]}… "
+                      f"status=failed error={error_type or 'unknown'}")
+                if too_many_consecutive_failures(consecutive_failures):
+                    stalled = True
+                    print("consecutive_failures=3 stopping=true")
+                    break
                 continue
+            consecutive_failures = 0
             event_count = sum(int(item["count"]) for item in tools)
             append_output(prep.OUTPUT, {
                 "prompt_text_sha256": sha,
@@ -234,7 +259,7 @@ def run(*, retries: int = MAX_RETRIES) -> dict[str, object]:
     return {
         "eligible": len(sample), "completed": len(rows), "failures": failures,
         "usage_limited": usage_limited, "probe_tool_events": probe_count,
-        "tool_events": total_tools,
+        "tool_events": total_tools, "stalled": stalled,
     }
 
 
