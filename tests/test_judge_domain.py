@@ -176,3 +176,8 @@ def test_domain_提示詞含例子與邊界但不含字典檔頭():
     assert "可能的預設桶" not in rendered
     assert "confidence=low" not in rendered
     assert "uid≥10" not in rendered
+
+
+def test連續三次呼叫失敗會停止但兩次不會():
+    assert not judge.too_many_consecutive_failures(2)
+    assert judge.too_many_consecutive_failures(3)

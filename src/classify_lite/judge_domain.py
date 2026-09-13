@@ -46,6 +46,7 @@ RUNAWAY_ABORT_USD = 60.0
 CALL_TIMEOUT_S = 240
 MAX_RETRIES = 4
 BACKOFF_S = (5, 15, 45, 120)
+MAX_CONSECUTIVE_FAILURES = 3
 SCHEMA_VERSION = "domain-v1"
 
 DOMAIN_VALUES = (
@@ -396,6 +397,11 @@ def call_with_backoff(prompt: str, schema: dict, cwd: Path):
     raise AssertionError("unreachable")
 
 
+def too_many_consecutive_failures(count: int) -> bool:
+    """避免配額或服務失敗時逐筆重複呼叫整個剩餘樣本。"""
+    return count >= MAX_CONSECUTIVE_FAILURES
+
+
 def blindness_check(cwd: Path) -> int:
     result, tools, _ = call_with_backoff(BLIND_PROBE_PROMPT, BLIND_PROBE_SCHEMA, cwd)
     if tools:
@@ -563,7 +569,7 @@ def main(argv: list[str] | None = None) -> int:
         uninstall_output_guard()
         raise SystemExit(f"盲化探針失敗（{type(exc).__name__}）；不執行判定") from None
 
-    successes = failures = suspicious = 0
+    successes = failures = suspicious = consecutive_failures = 0
     spent = 0.0
     for position, (_, row) in enumerate(todo.iterrows(), 1):
         sha = str(row["prompt_text_sha256"])
@@ -585,8 +591,12 @@ def main(argv: list[str] | None = None) -> int:
             raise
         except Exception as exc:
             failures += 1
+            consecutive_failures += 1
             print(f"[{position}/{len(todo)}] {sha[:12]}… 失敗（{type(exc).__name__}）")
             guard.clear()
+            if too_many_consecutive_failures(consecutive_failures):
+                print("連續呼叫失敗達停止門檻；保留既有輸出，停止")
+                break
             continue
         del content, prompt, result
 
@@ -617,6 +627,7 @@ def main(argv: list[str] | None = None) -> int:
             "schema_version": SCHEMA_VERSION,
         })
         successes += 1
+        consecutive_failures = 0
         guard.clear()
         print(f"[{position}/{len(todo)}] {sha[:12]}… 完成；tool_events={len(tools)}")
         if spent > RUNAWAY_ABORT_USD:
