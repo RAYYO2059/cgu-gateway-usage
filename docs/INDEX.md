@@ -5,7 +5,7 @@
 從 `src/metrics/registry.py` 的註冊表產生，請勿手動編輯——要改內容請改指標的
 `@metric` 參數。標記以外的導覽是手寫的。
 
-## 兩份結果文件，兩個問題
+## 結果文件導覽
 
 | 文件 | 資料 | 回答的問題 |
 | --- | --- | --- |
@@ -13,6 +13,7 @@
 | [RESULTS_lite.md](RESULTS_lite.md) | 24 天、120,520 筆、357 個 uid（275 人） | 誰在用、花了多少 |
 | [CLASSIFICATION_LIMITS.md](CLASSIFICATION_LIMITS.md) | 225 群描述性分流、58 群跨模型判定、30 群人工標註 | 「做什麼」目前不能往下推到哪裡，以及為什麼 |
 | [DOMAIN_CAP_CALIBRATION.md](DOMAIN_CAP_CALIBRATION.md) | 固定 600 筆中的 50 筆，1,200／4,000 各跑一次 | 逐筆 domain 判定的內容上限校準與限制 |
+| [DOMAIN_CROSS_RESULTS.md](DOMAIN_CROSS_RESULTS.md) | 600 筆逐筆判定、兩模型交叉與分層加權 | domain 的描述性結果、通過門檻與尚未釐清的異常 |
 
 **這不是舊版與新版的關係。** 兩批資料的 schema、期間、母體都不同，各自回答
 的問題也不同，而且**互相支撐**：

@@ -8,7 +8,7 @@
 >
 > 內容有變動就當下修。帶著過期的基準往下做，錯誤會擴散到之後每個決定。
 >
-> 最後更新：2026-09-13
+> 最後更新：2026-09-14
 
 ---
 
@@ -34,7 +34,7 @@ repo：https://github.com/RAYYO2059/cgu-gateway-usage
 | --- | --- |
 | 誰在用 | 完成。最小可靠粒度是**學院**，不是個人 |
 | 花多少 | 完成。US$2,749.32，牌價等值非帳單，**且非全量**（見下） |
-| 做什麼 | **未完成**。分流層已結案；domain 逐筆線的 Codex 600 筆已完成、Opus 只安全寫入 474/600，尚未達交叉判讀門檻 |
+| 做什麼 | **未完成**。分流層已結案；domain 逐筆線兩模型各完成 600/600，交叉一致 495/600（82.5%）通過事前 0.75 門檻，但無獨立真值、`not_applicable` 13 筆異常未釐清；不進主要報告 |
 
 `docs/OVERVIEW.md` 是主要交付物，七節散文全部寫完、數字全部逐項查證過。
 
@@ -127,8 +127,8 @@ Codex 的 58 群交叉判定已在 repo 外的 `codex_blind_2026-09/` 完成，�
 Domain 逐筆樣本已用固定種子 `2026091102` 從 17,365 個需送分類器的相異內容
 抽出 600 筆，分層是 `unit_type × [≤251, 252–986, 987–4799, ≥4800]`，每層
 先保底 15，再按母體比例分配剩餘；檔案在 `_rescued_scratchpad/domain_sample.csv`，
-不含明文。`src/classify_lite/judge_domain.py` 是 Opus 判定器；只可先跑
-`--dry-run`，正式執行僅在明確授權後進行。它最多送出每筆開頭 1,200 字元，輸出不含
+不含明文。`src/classify_lite/judge_domain.py` 是 Opus 判定器，已在明確授權後跑完
+正式 600 筆。它最多送出每筆開頭 1,200 字元，輸出不含
 `reason` 或任何文字欄，第三人標記另建 sha256 + source_path 索引。Domain 的
 Opus/Codex 交叉一致率門檻已在判定前凍結於 `ref/FREEZE_2026-09.md`：600 筆固定
 分母，`>= 0.75` 才繼續，否則不進報告。
@@ -138,10 +138,11 @@ Opus/Codex 交叉一致率門檻已在判定前凍結於 `ref/FREEZE_2026-09.md`
 3/25。後一臂內容逐位元組相同，是同期重跑／提示數字變動底線；沒有量到增加
 內容可改善穩定度，故正式上限維持 1,200。100 次皆成功、外部工具事件 0，
 估算成本合計 US$4.394604（不併入資料集成本）。完整限制與兩側指紋見
-`docs/DOMAIN_CAP_CALIBRATION.md`。正式 Opus 輸出已在相同指紋 `2f651b15…` 下安全寫入
-474/600 列，另有 126 列尚未判；Codex 隔離輸出已完成 600/600。2026-09-13 的接續執行
-在盲化探針自身重試後以 `RuntimeError` 停止，未送出新的判定；因此不得計算交叉一致率、
-不得把 474 列當成完成樣本或放入報告。
+`docs/DOMAIN_CAP_CALIBRATION.md`。正式 Opus 輸出在相同指紋 `2f651b15…` 下完成
+600/600；Codex 隔離輸出也完成 600/600，兩側工具事件與最終輸出失敗均為 0。
+domain 完全相同 495/600（82.5%），通過事前 0.75 門檻。完整分布、混淆矩陣、
+加權暫定估計與未解 `not_applicable` 異常見 `docs/DOMAIN_CROSS_RESULTS.md`。
+這是模型交叉判定，不是獨立人工驗證；不進 `docs/OVERVIEW.md`。
 
 ---
 
@@ -328,8 +329,8 @@ pytest 全過（不記具體數字，以實際輸出為準）
 | `domain_sample.csv` | Domain 逐筆分層樣本 600 列；只含 sha256、來源路徑與抽樣中繼資料，不含明文 |
 | `domain_cap_calibration_sample.csv` | 從 600 筆另抽的 50 筆上限校準樣本；1,200 截斷／未截斷各 25，不含明文 |
 | `domain_cap_calibration.1200.csv`、`domain_cap_calibration.4000.csv` | 同 50 筆各一次的校準結果；不併入正式判定輸出 |
-| `judge_domain_output.csv` | Domain 的 Opus 正式輸出；474/600 筆，**不完整，不得分析或報告** |
-| `domain_named_third_party.csv` | `named_third_party=true` 的 sha256 + source_path 索引；隨現有 Opus 輸出重建，仍屬不完整材料 |
+| `judge_domain_output.csv` | Domain 的 Opus 正式輸出；同指紋 600/600 筆，只能作描述性模型結果 |
+| `domain_named_third_party.csv` | `named_third_party=true` 的 sha256 + source_path 索引；Opus 23 筆，不含明文 |
 
 ---
 
@@ -665,11 +666,12 @@ python judge_clusters.py                        # LLM 判定（AI 代理可執�
    整個分類路線要重想。
 2. **Domain 字典仍由人工維護。** 現行八值會逐字進判定提示詞；不要由代理
    自行修改 `ref/label_dictionary.csv`。
-3. **Domain 正式判定尚未完成。** Codex 已在 bwrap 機械隔離下完成 600/600；Opus
-   同指紋輸出只有 474/600，2026-09-13 接續時盲化探針以 `RuntimeError` 停止。必須從
-   既有輸出安全續跑，不能重抽、不能把缺列記成失敗或結果。
-4. **Domain 交叉一致率尚未量。** 固定分母 600、門檻 0.75 已預先凍結；
-   `named_third_party` 與 `confidence` 不進通過條件。
+3. **Domain 交叉門檻通過，但異常未釐清。** 兩側各 600/600、完全同值
+   495/600（82.5%）；Opus 的 `not_applicable` 為 13/600，而事前預期是 0。
+   既有四條前置規則對這 13 筆均未命中；需由人隔離審核是規則漏抓或模型誤用，
+   不得以交叉一致率取代獨立真值，暫定加權分布不進主要報告。
+4. **Domain 的加權估計尚未附抽樣誤差區間。** 加權請求原始估計
+   61,466.14，高於已知 58,100；比值估計與限制見 `docs/DOMAIN_CROSS_RESULTS.md`。
 5. **84 群雖已有現行與舊指紋配對，跨指紋變動尚未量。** 兩次之間同時改了
    不只一件事，所以只能當加值描述，不能解讀成單一改動的效果。
 6. **全 225 群的生產探針失敗率無法從產物重建。** 判定 CSV 不存探針事件，
