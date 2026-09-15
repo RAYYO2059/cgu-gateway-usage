@@ -12,12 +12,14 @@ import csv
 import hashlib
 import importlib.metadata
 import json
+import os
 import platform
 import re
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
 from contextlib import contextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
@@ -66,6 +68,19 @@ ALLOWED_UNTRACKED_DOCS = {
 AUTOGEN_MARKER = re.compile(
     r"<!-- AUTOGEN:(?P<name>[^:]+):(?P<edge>START|END) -->"
 )
+CATEGORY_KEYS = {
+    "A": "A_files",
+    "B": "B_autogen",
+    "C": "C_docs",
+    "D": "D_concentration",
+    "E": "E_metrics",
+    "F": "F_tables",
+    "G": "G_classification",
+    "H": "H_cost_total",
+    "I": "I_tests",
+}
+CATEGORY_LETTERS = {key: letter for letter, key in CATEGORY_KEYS.items()}
+MANIFEST_VERSION = 2
 
 
 class GoldenError(RuntimeError):
@@ -92,7 +107,10 @@ def combined_sha256(value: Any) -> str:
 
 
 def relative(path: Path) -> str:
-    return path.relative_to(PROJECT_ROOT).as_posix()
+    try:
+        return path.relative_to(PROJECT_ROOT).as_posix()
+    except ValueError:
+        return path.as_posix()
 
 
 def extract_autogen_blocks(text: str, label: str = "document") -> dict[str, str]:
@@ -447,6 +465,40 @@ def capture_snapshot(run_id: str) -> dict[str, Any]:
     }
 
 
+def compare_tests(
+    expected: Mapping[str, Any], actual: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Tests may grow between rounds; they may not fail, shrink, or change skips.
+
+    exit_code is deliberately ignored: a non-zero pytest exit is already
+    expressed by failed > 0.
+    """
+
+    def skip_keys(items: Iterable[Mapping[str, str]]) -> set[tuple[str, str]]:
+        return {(item["node_id"], item["reason"]) for item in items}
+
+    expected_skips = skip_keys(expected.get("skip_items", []))
+    actual_skips = skip_keys(actual.get("skip_items", []))
+    failed = int(actual["failed"])
+    passed_delta = int(actual["passed"]) - int(expected["passed"])
+    skip_missing = sorted(
+        f"{node} reason={reason}" for node, reason in expected_skips - actual_skips
+    )
+    skip_extra = sorted(
+        f"{node} reason={reason}" for node, reason in actual_skips - expected_skips
+    )
+    return {
+        "match": failed == 0
+        and passed_delta >= 0
+        and not skip_missing
+        and not skip_extra,
+        "failed": failed,
+        "passed_delta": passed_delta,
+        "skip_missing": skip_missing,
+        "skip_extra": skip_extra,
+    }
+
+
 def compare_snapshots(
     expected: Mapping[str, Any], actual: Mapping[str, Any], strict_docs: bool
 ) -> dict[str, Any]:
@@ -463,12 +515,11 @@ def compare_snapshots(
         expected["G_classification"], actual["G_classification"]
     )
     categories["H_cost_total"] = {
-        "match": expected["H_cost_total"] == actual["H_cost_total"]
+        "match": expected["H_cost_total"] == actual["H_cost_total"],
+        "expected": expected["H_cost_total"],
+        "actual": actual["H_cost_total"],
     }
-    tests_match = expected["I_tests"] == actual["I_tests"]
-    categories["I_tests"] = {
-        "match": tests_match and actual["I_tests"]["failed"] == 0
-    }
+    categories["I_tests"] = compare_tests(expected["I_tests"], actual["I_tests"])
     failed = [
         name
         for name, comparison in categories.items()
@@ -510,7 +561,9 @@ def print_snapshot_report(
     comparison: Mapping[str, Any] | None,
     idempotency: Mapping[str, Any],
     strict_docs: bool,
+    accepted: Iterable[str] = (),
 ) -> None:
+    accepted = set(accepted)
     print(f"golden {mode}: run_id={run_id}")
     category_values = {
         "A": snapshot["A_files"],
@@ -537,8 +590,10 @@ def print_snapshot_report(
             ]
             if label == "C" and not strict_docs:
                 state = "REPORT" if detail["match"] else "REPORT-CHANGED"
+            elif detail["match"]:
+                state = "PASS"
             else:
-                state = "PASS" if detail["match"] else "FAIL"
+                state = "ACCEPTED" if label in accepted else "FAIL"
         print(
             f"{label} {state} count={item_count(value)} "
             f"sha256={combined_sha256(value)[:12]}"
@@ -550,9 +605,17 @@ def print_snapshot_report(
     cost_state = "CAPTURED"
     test_state = "CAPTURED"
     if comparison is not None:
-        cost_state = "PASS" if comparison["categories"]["H_cost_total"]["match"] else "FAIL"
-        test_state = "PASS" if comparison["categories"]["I_tests"]["match"] else "FAIL"
+        states = {}
+        for label in ("H", "I"):
+            detail = comparison["categories"][CATEGORY_KEYS[label]]
+            if detail["match"]:
+                states[label] = "PASS"
+            else:
+                states[label] = "ACCEPTED" if label in accepted else "FAIL"
+        cost_state, test_state = states["H"], states["I"]
     print(f"H {cost_state} cost_usd={snapshot['H_cost_total']}")
+    if comparison is not None and not comparison["categories"]["H_cost_total"]["match"]:
+        print(f"  H expected={comparison['categories']['H_cost_total']['expected']}")
     tests = snapshot["I_tests"]
     print(
         f"I {test_state} passed={tests['passed']} skipped={tests['skipped']} "
@@ -560,6 +623,13 @@ def print_snapshot_report(
     )
     for item in tests["skip_items"]:
         print(f"  I skip: {item['node_id']} reason={item['reason']}")
+    if comparison is not None:
+        test_detail = comparison["categories"]["I_tests"]
+        if test_detail["passed_delta"] != 0:
+            print(f"  I passed delta: {test_detail['passed_delta']:+d}")
+        for kind in ("skip_missing", "skip_extra"):
+            for item in test_detail[kind]:
+                print(f"  I {kind}: {item}")
     print(
         "IDEMPOTENT "
         f"{'PASS' if idempotency['match'] else 'FAIL'} "
@@ -606,7 +676,128 @@ def compact_report(
     }
 
 
-def execute(mode: str, strict_docs: bool) -> int:
+def describe_exception(exc: BaseException) -> str:
+    """Exception type and a bounded first message line; never data dumps."""
+    kind = type(exc)
+    name = kind.__qualname__
+    if kind.__module__ not in ("builtins", "__main__"):
+        name = f"{kind.__module__}.{name}"
+    if kind.__module__.split(".")[0] == "pandera":
+        return f"{name}: (message withheld; pandera errors embed failure-case values)"
+    lines = str(exc).strip().splitlines()
+    message = lines[0] if lines else ""
+    if len(message) > 200:
+        message = message[:200] + "..."
+    return f"{name}: {message}"
+
+
+def parse_accept(values: Iterable[str]) -> list[str]:
+    letters: set[str] = set()
+    for value in values:
+        for part in value.split(","):
+            letter = part.strip().upper()
+            if not letter:
+                continue
+            if letter not in CATEGORY_KEYS:
+                raise GoldenError(
+                    f"unknown category in --accept: {part.strip()!r} "
+                    f"(expected {','.join(CATEGORY_KEYS)})"
+                )
+            letters.add(letter)
+    return sorted(letters)
+
+
+def category_digest(snapshot: Mapping[str, Any], letter: str) -> str:
+    value = snapshot[CATEGORY_KEYS[letter]]
+    if letter == "B":
+        value = flatten_blocks(value)
+    return combined_sha256(value)
+
+
+def git_state() -> dict[str, Any]:
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=PROJECT_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    tracked = subprocess.run(
+        ["git", "status", "--porcelain=v1", "--untracked-files=no"],
+        cwd=PROJECT_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    return {"head": head, "tracked_changes": bool(tracked)}
+
+
+def history_entry(
+    *,
+    accepted: list[str],
+    accept_environment: bool,
+    reason: str,
+    environment: Mapping[str, str],
+    previous: Mapping[str, Any] | None,
+    snapshot: Mapping[str, Any],
+) -> dict[str, Any]:
+    state = git_state()
+    categories = {}
+    for letter in CATEGORY_KEYS:
+        old = None
+        if previous is not None:
+            old = category_digest(previous["snapshot"], letter)[:12]
+        categories[letter] = {
+            "old": old,
+            "new": category_digest(snapshot, letter)[:12],
+        }
+    return {
+        "captured_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "initial": previous is None,
+        "accepted": accepted,
+        "accept_environment": accept_environment,
+        "reason": reason or None,
+        "git_head": state["head"],
+        "git_tracked_changes": state["tracked_changes"],
+        "environment": dict(environment),
+        "previous_environment": (
+            dict(previous.get("environment", {})) if previous is not None else None
+        ),
+        "categories": categories,
+    }
+
+
+def write_manifest(payload: Mapping[str, Any]) -> None:
+    MANIFEST_PATH.parent.mkdir(parents=True, exist_ok=True)
+    temporary = MANIFEST_PATH.with_name(MANIFEST_PATH.name + ".tmp")
+    temporary.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    os.replace(temporary, MANIFEST_PATH)
+
+
+def execute(
+    mode: str,
+    strict_docs: bool,
+    accept: Iterable[str] = (),
+    reason: str | None = None,
+    accept_environment: bool = False,
+) -> int:
+    """Exit 0 = pass, 1 = comparable but inconsistent, 2 = preconditions unmet."""
+    try:
+        accepted = parse_accept(accept)
+    except GoldenError as exc:
+        print(f"golden: {exc}")
+        return 2
+    reason_text = (reason or "").strip()
+    if mode != "capture" and (accepted or accept_environment or reason is not None):
+        print("golden: --accept, --accept-environment and --reason apply only to capture")
+        return 2
+    if (accepted or accept_environment) and not reason_text:
+        print("golden: --accept/--accept-environment require a non-empty --reason")
+        return 2
+
     worktree = check_worktree()
     if worktree:
         print("golden: cannot compare because docs/ or README.md has changes")
@@ -614,24 +805,43 @@ def execute(mode: str, strict_docs: bool) -> int:
             print(f"  {item['status']} {item['path']}")
         return 2
 
+    try:
+        current_environment = environment_versions()
+    except GoldenError as exc:
+        print(f"golden: cannot compare: {exc}")
+        return 2
+
     manifest: dict[str, Any] | None = None
-    current_environment = environment_versions()
-    if mode == "verify":
-        if not MANIFEST_PATH.is_file():
-            print(f"golden: manifest is missing: {relative(MANIFEST_PATH)}")
+    if MANIFEST_PATH.is_file():
+        try:
+            manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            print(f"golden: manifest is not valid JSON: {exc.msg} (line {exc.lineno})")
             return 2
-        manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+    elif mode == "verify":
+        print(f"golden: manifest is missing: {relative(MANIFEST_PATH)}")
+        return 2
+    elif accepted or accept_environment:
+        print("golden: no manifest yet; the first capture takes no --accept flags")
+        return 2
+
+    if manifest is not None:
         differences = environment_differences(
             manifest.get("environment", {}), current_environment
         )
-        if differences:
+        if differences and not accept_environment:
             print("golden: environment versions differ; comparison is invalid")
             for package, values in differences.items():
                 print(
                     f"  {package}: expected={values['expected']} actual={values['actual']}"
                 )
-            print("confirm the old environment, then run capture again")
+            print(
+                "confirm the old environment passes, then run capture "
+                "--accept-environment --reason ... in the new one"
+            )
             return 2
+        if accept_environment and not differences:
+            print("golden: note: --accept-environment given but versions are identical")
 
     try:
         run_id = run_pipeline()
@@ -640,53 +850,91 @@ def execute(mode: str, strict_docs: bool) -> int:
         second_published = published_hashes()
         idempotency = idempotency_comparison(first_published, second_published)
         snapshot = capture_snapshot(run_id)
-    except (GoldenError, AssertionError, ValueError, OSError) as exc:
-        print(f"golden: cannot compare: {type(exc).__name__}: {exc}")
-        return 2
+    except Exception as exc:  # the program under test is broken: a mismatch
+        print(f"golden: pipeline raised: {describe_exception(exc)}")
+        print("golden: FAIL (the program under test raised; not a precondition)")
+        return 1
 
-    if snapshot["G_classification"]["eligible_population"] != EXPECTED_POPULATION_SHA256:
-        print("golden: eligible population fingerprint differs from the frozen value")
-        print(
-            "  actual="
-            f"{snapshot['G_classification']['eligible_population'][:12]}"
-        )
-        return 2
+    population_ok = (
+        snapshot["G_classification"]["eligible_population"]
+        == EXPECTED_POPULATION_SHA256
+    )
 
+    # capture never lets handwritten doc changes slip into the baseline unaccepted
+    effective_strict = strict_docs or mode == "capture"
     comparison: dict[str, Any] | None = None
-    if mode == "capture":
-        if not idempotency["match"] or snapshot["I_tests"]["failed"] != 0:
-            print_snapshot_report(
-                mode, run_id, snapshot, comparison, idempotency, strict_docs
-            )
-            print("golden: capture refused because acceptance checks failed")
-            return 2
-        MANIFEST_PATH.parent.mkdir(parents=True, exist_ok=True)
-        payload = {
-            "manifest_version": 1,
-            "environment": current_environment,
-            "snapshot": snapshot,
-        }
-        MANIFEST_PATH.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
-    else:
-        assert manifest is not None
+    if manifest is not None:
         comparison = compare_snapshots(
-            manifest["snapshot"], snapshot, strict_docs=strict_docs
+            manifest["snapshot"], snapshot, strict_docs=effective_strict
         )
 
-    print_snapshot_report(mode, run_id, snapshot, comparison, idempotency, strict_docs)
+    print_snapshot_report(
+        mode, run_id, snapshot, comparison, idempotency, effective_strict, accepted
+    )
     report = compact_report(mode, run_id, snapshot, comparison, idempotency)
     report_path = config.RUNS_DIR / run_id / "golden_verify.json"
     report_path.write_text(
         json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
     print(f"report={relative(report_path)}")
-    if mode == "verify" and comparison is not None and not comparison["match"]:
+
+    problems: list[str] = []
+    if not population_ok:
+        problems.append(
+            "eligible population fingerprint differs from the frozen value "
+            f"(actual={snapshot['G_classification']['eligible_population'][:12]})"
+        )
+    if not idempotency["match"]:
+        problems.append("rendering is not idempotent")
+    if snapshot["I_tests"]["failed"] != 0:
+        problems.append(f"pytest reports failed={snapshot['I_tests']['failed']}")
+
+    if mode == "verify":
+        for problem in problems:
+            print(f"golden: {problem}")
+        assert comparison is not None
+        if problems or not comparison["match"]:
+            return 1
+        return 0
+
+    if comparison is not None:
+        failed_letters = [CATEGORY_LETTERS[name] for name in comparison["failed_categories"]]
+        unaccepted = [letter for letter in failed_letters if letter not in accepted]
+        if unaccepted:
+            problems.append(
+                "categories differ without --accept: " + ",".join(unaccepted)
+            )
+        unchanged = [letter for letter in accepted if letter not in failed_letters]
+        if unchanged:
+            print(
+                "golden: note: accepted but unchanged: " + ",".join(unchanged)
+            )
+    if problems:
+        for problem in problems:
+            print(f"golden: {problem}")
+        print("golden: capture refused; manifest left unchanged")
         return 1
-    if not idempotency["match"] or snapshot["I_tests"]["failed"] != 0:
-        return 1
+
+    history = list(manifest.get("history", [])) if manifest is not None else []
+    history.append(
+        history_entry(
+            accepted=accepted,
+            accept_environment=accept_environment,
+            reason=reason_text,
+            environment=current_environment,
+            previous=manifest,
+            snapshot=snapshot,
+        )
+    )
+    write_manifest(
+        {
+            "manifest_version": MANIFEST_VERSION,
+            "environment": current_environment,
+            "snapshot": snapshot,
+            "history": history,
+        }
+    )
+    print(f"golden: manifest written; history entries={len(history)}")
     return 0
 
 
@@ -698,12 +946,34 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="treat handwritten changes in the five published Markdown files as failures",
     )
+    parser.add_argument(
+        "--accept",
+        action="append",
+        default=[],
+        metavar="LETTERS",
+        help="capture only: comma-separated categories (A-I) allowed to differ, e.g. A,B,E",
+    )
+    parser.add_argument(
+        "--reason",
+        help="capture only: required with --accept or --accept-environment",
+    )
+    parser.add_argument(
+        "--accept-environment",
+        action="store_true",
+        help="capture only: allow package versions to differ from the manifest",
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    return execute(args.command, strict_docs=args.strict_docs)
+    return execute(
+        args.command,
+        strict_docs=args.strict_docs,
+        accept=args.accept,
+        reason=args.reason,
+        accept_environment=args.accept_environment,
+    )
 
 
 if __name__ == "__main__":

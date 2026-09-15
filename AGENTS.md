@@ -281,10 +281,24 @@ Golden 快照可用一個指令同時重跑並比對 clean 與 lite 的完整產
 python tools/golden.py verify
 ```
 
-exit code `0` 表示通過，`1` 表示可比較但產出不一致，`2` 表示前置條件不足、
-無法比較。若 Python、pandas、pyarrow、numpy、matplotlib 或 pandera 的版本與
-manifest 不同，必須先在舊環境確認既有快照仍通過，再於確認過的新環境執行
-`python tools/golden.py capture` 重新建立基準；不可把版本差異判成通過或失敗。
+exit code `0` 表示通過。`1` 表示可比較但不一致，**包括管線執行中拋出例外、
+以及分類母體指紋與凍結值 `63af7d40…` 不符**——這兩種是被測程式壞了，不是環境
+問題。`2` 只限前置條件不足：`docs/`／`README.md` 有未提交改動、manifest 不存在、
+套件版本與 manifest 不同、缺必要套件。
+
+`capture` 在 manifest 已存在時先做與 `verify` 相同的比對，**只有 `--accept`
+列出的類別可以不一致**（例：`--accept A,B,E --reason "<為什麼>"`），其餘類別
+不一致就拒絕寫入並回 1；`--accept` 必須帶非空的 `--reason`。capture 時 C 類
+（手寫文件）一律強制比對。每次寫入在 manifest 的 `history` 追加一筆（時間、
+接受的類別、reason、HEAD、環境版本、各類別新舊雜湊前 12 碼），既有紀錄不改寫。
+I 類（pytest）只要求 failed 為 0、skip 清單不變、passed 不減少——新增測試
+**不需要**重新 capture。
+
+若 Python、pandas、pyarrow、numpy、matplotlib 或 pandera 的版本與 manifest 不同，
+必須先在舊環境確認既有快照仍通過，再於確認過的新環境執行
+`python tools/golden.py capture --accept-environment --reason "<為什麼>"`；
+A–I 仍按上面的規則比對，版本升級讓圖檔改變就要明寫 `--accept A`。
+不可把版本差異判成通過或失敗。
 
 **`concentration.csv` 不在裡面，它在 `runs/<run_id>/`，不進版控。**
 先前這裡把它列進 `docs/` 那一串，讓清單加起來與寫的數字對不上——
