@@ -2,7 +2,7 @@
 
 分兩段而不是一支腳本，因為兩段的成本差三個數量級：
 
-    markers.py    讀 data/00_raw_lite/ 的原始 JSON  約 25 分鐘
+    markers.py    讀 data/00_raw_lite/ 的原始 JSON  約 3.5 分鐘
     prefilter.py  只吃 markers.parquet 與已抽取的 parquet  秒級
 
 規則改動時要重跑的是第二段。合成一支的話，每次調整判定都得重讀 12 萬個
@@ -11,4 +11,6 @@
 **這兩支必須在版控裡。** 它們產生的是分類母數，而母數錯了後面所有比例
 都跟著錯。前一版寫在 session scratchpad、隨 session 消失，文件卻留著它
 算出來的數字——見 ENGINEERING_NOTES〈進入文件的數字，其產生程式必須在版控內〉。
+
+本套件另含抽樣、判定與彙總腳本，說明見 `docs/RUNBOOK_lite.md` 與各模組 docstring。
 """

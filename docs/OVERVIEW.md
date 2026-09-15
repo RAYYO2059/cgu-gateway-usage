@@ -896,6 +896,9 @@ gateway 未提供對應機制。
 | [`RESULTS.md`](RESULTS.md) | clean（1.8 天、9,937 筆）的完整表格，含 turn 層分析 |
 | [`RUNBOOK_lite.md`](RUNBOOK_lite.md) | 資料擴充與重跑的操作手冊，含已知的坑 |
 | [`PROGRESS.md`](PROGRESS.md) | 階段性進度快照 |
+| [`UPSTREAM_FILTER.md`](UPSTREAM_FILTER.md) | 上游的前置過濾：未進入本專案的資料，影響規模與成本 |
+| [`CLASSIFICATION_LIMITS.md`](CLASSIFICATION_LIMITS.md) | 用途分流層的能力界線：只記既有分流結果的限制，不提出新值域或新判準 |
+| [`DOMAIN_CROSS_RESULTS.md`](DOMAIN_CROSS_RESULTS.md) | Domain 逐筆交叉判定：描述性結果與未解異常 |
 
 本文件與 `RESULTS_lite.md` 的分工：本文件挑選數字並解釋其含意，
 `RESULTS_lite.md` 給出 lite 主管線指標的完整欄位。
@@ -915,7 +918,7 @@ gateway 未提供對應機制。
 | [`ref/college_mapping.csv`](../ref/college_mapping.csv) | 系所代碼 → 學院。28 個代碼、25 個系所身分、4 個學院 |
 | [`ref/pricing_table.csv`](../ref/pricing_table.csv) | 模型 → 牌價。66 列，含生效日分段與每個價位的可靠度標記 |
 | [`ref/prefilter_markers.csv`](../ref/prefilter_markers.csv) | 前置規則的判定字串。9 條，含一條明確不攔的排除項 |
-| [`ref/label_dictionary.csv`](../ref/label_dictionary.csv) | 三軸分類的值域與邊界說明 |
+| [`ref/label_dictionary.csv`](../ref/label_dictionary.csv) | 兩層：分類法（給人標註內容用的最終標籤）與分流判準（給判定器判群集去留用） |
 
 ### 資料與圖
 
@@ -929,7 +932,7 @@ gateway 未提供對應機制。
 ```bash
 python -m src.extract_lite                         # L1：原始 JSON → parquet
 python -m src.schema_lite                          # 契約驗證
-python -m src.run aggregate                        # L2：人層級表與集中度
+python -m src.aggregate_lite                       # L2：人層級表與集中度
 python -m src.run metrics --line lite --publish    # 指標，並發佈到 docs/
 
 python -m src.classify_lite.markers                # 用途分類前置：掃結構標記

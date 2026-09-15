@@ -8,7 +8,7 @@
 >
 > 內容有變動就當下修。帶著過期的基準往下做，錯誤會擴散到之後每個決定。
 >
-> 最後更新：2026-09-14
+> 最後更新以 `git log -1 -- CLAUDE.md` 為準
 
 ---
 
@@ -364,6 +364,9 @@ Codex 的兩次隔離判定另在 `C:\Users\isrea\Desktop\AIR\codex_blind_2026-0
 | `review_clusters.py` | **三軸值域與定義的唯一來源**（`FIELDS`／`FIELD_HELP`）。`judge_clusters.py` 用 `_load_carrier()` 從它取，不另寫一份——兩邊定義不同就沒得比 |
 | `judge_clusters.py` | 判定器。指紋由它與載具共同決定 |
 | `rescreen_prefixes.py` | 複篩抽樣程式（含分層保底規則） |
+| `blind_labels.csv` | 人工盲標的 v1 手填紀錄（見〈現行分流結果〉與 `docs/CLASSIFICATION_LIMITS.md`〈來源與版本〉）。由人工產生，重建要人再標一遍 |
+| `named_third_party_review.csv` | domain 第三人標記聯集的人工逐筆審閱紀錄，只有 sha256、三值答案、耗時與時間（見 `docs/DOMAIN_CROSS_RESULTS.md`〈第三人標記的人工逐筆審閱〉）。由人工產生 |
+| `review_named_third_party.py` | 上一列的審閱載具，repo 內沒有副本。`tests/test_review_named_third_party.py` 從這個路徑載入並釘住上限與批次，但審閱順序種子的值只在這支程式裡 |
 
 `ref/label_dictionary.csv` 裡「層 == 分流判準」那些列必須與 `FIELD_HELP`
 **逐字相同**，由 `tests/test_judge_clusters.py` 的同步測試保證。
@@ -385,6 +388,8 @@ Codex 的兩次隔離判定另在 `C:\Users\isrea\Desktop\AIR\codex_blind_2026-0
 | `domain_cap_calibration.1200.csv`、`domain_cap_calibration.4000.csv` | 同 50 筆各一次的校準結果；不併入正式判定輸出 |
 | `judge_domain_output.csv` | Domain 的 Opus 正式輸出；同指紋 600/600 筆，只能作描述性模型結果 |
 | `domain_named_third_party.csv` | `named_third_party=true` 的 sha256 + source_path 索引；Opus 23 筆，不含明文 |
+| `blind_label_sample.csv` | 58 群人工盲標樣本，只有 `group_id` 與 opaque `stratum`；`python -m src.classify_lite.sample_blind_labels`（種子 `20260911`）重生 |
+| `domain_named_third_party_union.csv` | 兩模型 `named_third_party=true` 的聯集，只有 `prompt_text_sha256`、`source_path` 兩欄；`python -m src.classify_lite.analyze_domain_population` 由 `domain_sample.csv`、`judge_domain_output.csv` 與 `codex_domain_output.csv` 重生 |
 
 ---
 
@@ -654,6 +659,7 @@ ref/          人工維護的對照表（白名單制 gitignore，新檔要先 c
   prefilter_markers.csv     進版控   前置規則判定字串
   label_dictionary.csv      進版控   兩層：分類法（給人）與分流判準（給判定器）
   annotation_protocol.md    進版控   凍結座標、標註規則、退回門檻
+  FREEZE_2026-09.md         進版控   取得新驗證資料前的凍結版本
   user_registry.csv         gitignore（含帳號）
   lite_user_registry.csv    gitignore（含帳號）
 
@@ -685,7 +691,7 @@ runs/         執行快照，gitignore
 ```bash
 python -m src.extract_lite                      # L1：原始 JSON → parquet
 python -m src.schema_lite                       # 契約驗證
-python -m src.run aggregate                     # L2：人層級表與集中度
+python -m src.aggregate_lite                    # L2：人層級表與集中度
 python -m src.run metrics --line lite --publish # 指標，並發佈到 docs/
 python -m src.run metrics --line clean --publish  # 驗收用：clean 逐位元組比對
 

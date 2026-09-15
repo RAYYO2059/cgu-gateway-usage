@@ -12,7 +12,6 @@ runs/
 # 帳號對照表，絕對不能推；只放行明確列出的文件檔
 ref/*
 !ref/FREEZE_2026-09.md
-!ref/FIELD_REQUESTS.md
 # 系代號→學院對照表：內容是公開的系所編制，沒有個資，
 # 而且是人工維護的判斷，要進版控才看得出誰在什麼時候改了哪一列。
 !ref/college_mapping.csv

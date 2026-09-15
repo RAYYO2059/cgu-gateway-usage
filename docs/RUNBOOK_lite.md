@@ -340,7 +340,7 @@ python -m src.classify_lite.prefilter    # 只吃上一段的輸出，秒級
 ## 已知的坑
 
 **1. 絕對不要把 lite 檔案放進 `data/00_raw/`——但兄弟目錄是安全的。**
-clean 的 `extract.py:658` 是 `config.DATA_RAW.rglob("*.json")`，而
+clean 的 `extract.scan_sources()` 是 `config.DATA_RAW.rglob("*.json")`，而
 `DATA_RAW = data/00_raw`。`rglob` 從那裡**往下**遞迴，所以：
 
 - **危險**：`data/00_raw/` 底下的任何位置，包括再深的子目錄。

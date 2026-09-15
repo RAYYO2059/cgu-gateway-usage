@@ -153,7 +153,7 @@ def run(chunk_size: int = CHUNK_SIZE, max_files: int | None = None) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="掃相異 prompt 的結構標記（讀原始 JSON，約 25 分鐘）")
+        description="掃相異 prompt 的結構標記（讀原始 JSON，約 3.5 分鐘）")
     parser.add_argument("--chunk-size", type=int, default=CHUNK_SIZE,
                         help="每塊幾個相異 prompt（只影響存檔頻率）")
     parser.add_argument("--max-files", type=int, default=None,
