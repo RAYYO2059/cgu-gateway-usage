@@ -275,6 +275,17 @@ pytest 全過（不記具體數字，以實際輸出為準）
 成本總額 $2,749.32
 ```
 
+Golden 快照可用一個指令同時重跑並比對 clean 與 lite 的完整產出：
+
+```
+python tools/golden.py verify
+```
+
+exit code `0` 表示通過，`1` 表示可比較但產出不一致，`2` 表示前置條件不足、
+無法比較。若 Python、pandas、pyarrow、numpy、matplotlib 或 pandera 的版本與
+manifest 不同，必須先在舊環境確認既有快照仍通過，再於確認過的新環境執行
+`python tools/golden.py capture` 重新建立基準；不可把版本差異判成通過或失敗。
+
 **`concentration.csv` 不在裡面，它在 `runs/<run_id>/`，不進版控。**
 先前這裡把它列進 `docs/` 那一串，讓清單加起來與寫的數字對不上——
 兩個都錯，卻因為沒有人相加而存活了下來。
