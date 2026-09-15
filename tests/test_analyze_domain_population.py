@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import json
 import math
+from pathlib import Path
 
 import pandas as pd
 
@@ -53,6 +54,62 @@ def test_stratified_fpc_and_request_ratio():
     assert rare["content_share"] is None and rare["request_share"] is None
 
 
+def test_known_request_total_calibrates_counts_not_ratio_share():
+    sample, opus, _ = _synthetic()
+    result = analysis.stratified_estimates(sample, opus)
+    rows = result["domains"]
+    assert math.isclose(sum(x["estimated_requests"] for x in rows),
+                        result["weighted_request_total"])
+    assert math.isclose(sum(x["ratio_adjusted_requests"] for x in rows),
+                        result["actual_request_total"])
+    for row in rows:
+        assert math.isclose(row["ratio_adjusted_requests"],
+                            row["estimated_requests"]
+                            * result["actual_request_total"]
+                            / result["weighted_request_total"])
+        if row["sample_n"] >= 10:
+            assert math.isclose(row["request_share"],
+                                row["ratio_adjusted_requests"]
+                                / result["actual_request_total"])
+            assert math.isclose(row["raw_known_request_share"],
+                                row["estimated_requests"]
+                                / result["actual_request_total"])
+            assert row["raw_known_request_ci95"] is not None
+
+
+def test_ratio_estimate_changes_when_sample_repeat_count_changes():
+    sample, opus, _ = _synthetic()
+    baseline = analysis.stratified_estimates(sample, opus)
+    changed = sample.copy()
+    changed.loc[300, "n_requests"] *= 20
+    mutant = analysis.stratified_estimates(changed, opus)
+    assert mutant["weighted_request_total"] > baseline["weighted_request_total"]
+    baseline_clinical = next(x for x in baseline["domains"] if x["domain"] == "clinical")
+    mutant_clinical = next(x for x in mutant["domains"] if x["domain"] == "clinical")
+    assert mutant_clinical["request_share"] > baseline_clinical["request_share"]
+    assert math.isclose(sum(x["ratio_adjusted_requests"] for x in mutant["domains"]),
+                        analysis.POPULATION_REQUESTS)
+
+
+def test_request_diagnostics_reconciles_strata_without_identifiers():
+    sample, _, _ = _synthetic()
+    population = sample[["prompt_text_sha256", "unit_type", "length_stratum",
+                         "n_requests"]].copy()
+    extra = pd.DataFrame({
+        "prompt_text_sha256": [f"synthetic_{i:05d}" for i in range(600, 17_365)],
+        "unit_type": ["second"] * 16_765,
+        "length_stratum": ["Q1"] * 16_765,
+        "n_requests": [1] * 16_765,
+    })
+    population = pd.concat([population, extra], ignore_index=True)
+    result = analysis.request_diagnostics(sample, population)
+    assert len(result["strata"]) == 2
+    assert sum(x["actual_requests"] for x in result["strata"]) == 20_215
+    assert result["largest_items"][0]["stratum"] == "second|Q1"
+    rendered = json.dumps(result)
+    assert "synthetic_" not in rendered
+
+
 def test_review_list_is_union_and_only_two_allowed_columns(tmp_path):
     sample, opus, codex = _synthetic()
     opus.loc[0, "named_third_party"] = "true"
@@ -96,3 +153,20 @@ def test_not_applicable_metadata_exposes_no_sha_uid_or_path(tmp_path, monkeypatc
     assert result["in_clusters"] == 13 and result["scattered"] == 0
     assert all(key not in rendered for key in keys)
     assert "private_uid_" not in rendered and "local_" not in rendered
+
+
+def test_domain_index_records_both_units_and_their_denominators():
+    index = (Path(__file__).resolve().parents[1] / "docs" / "INDEX.md").read_text(
+        encoding="utf-8")
+
+    def check(text):
+        assert "`model_domain_by_unique_content`" in text
+        assert "`model_domain_by_request`" in text
+        assert "樣本數／600" in text
+        assert "樣本對應請求／2,571" in text
+        assert "58,100" in text
+        assert "非經人工驗證的真實用途分布" in text
+
+    check(index)
+    with __import__("pytest").raises(AssertionError):
+        check(index.replace("樣本對應請求／2,571", "樣本對應請求／58,100"))

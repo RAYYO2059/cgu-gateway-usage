@@ -32,12 +32,117 @@ failed_files / failures         0 / 0
 23 份 manifest 的 `schema` 全部是 `ai_platform_request` `1.1-lite`
 ——與請求記錄同一個 schema 版本，所以這不是某一天的例外格式。
 
+23 天的目錄欄位也沿用同一個模板：
+
+```text
+input_dir   C:\Users\ccllab\Desktop\lite\requset_logs\<date>
+output_dir  C:\Users\ccllab\Desktop\lite\test_new\<date>
+```
+
+**這是路徑的結構事實，不是執行者身分證據。** 排除發生在個人桌面的輸入目錄，
+輸出目錄叫 `test_new`；輸入目錄的 `requset_logs` 拼字錯誤在 23 天均未修正。
+這呈現為個人桌面上的批次處理，而非從現有材料可確認的有規格管線；
+實際是手動操作還是腳本自動跑，manifest 無法區分。要追問的是實際執行或持有
+處理腳本的人，而「排除規則是什麼」的答案可能在腳本裡，不一定有獨立文件。
+本檔不據路徑推測帳號持有人是誰。
+
 **每日的 `written_records` 與 L1 的列數逐日相符**（下表第三、四欄），
 所以下面這張表是精確對照，不是估計。
 
+## 一之一、已交付後的欄位缺值
+
+這一層與 manifest 的 21,099 筆排除不同：記錄已經寫入 L1，但
+`prompt_text` 的雜湊與長度不可用。120,520 筆 lite 請求中，**241 筆**的
+`prompt_text_sha256` 缺值，且 241 筆的 `prompt_text_len` 也都是缺值，
+**不是長度 0**。因此：
+
+```text
+120,279 = 120,520 − 241
+```
+
+`120,279` 是有 `prompt_text_sha256` 的已交付請求數，已經扣除這 241 筆；
+後續形成 33,666 個相異內容時不可再扣一次。
+
+241 筆中有 **174 筆**使用 `/v1/responses`，集中在三個匿名帳號，依各自
+缺值請求數由大到小為 **99／47／28** 筆。本檔不記 uid，也不記帳號類別
+以外的任何使用者屬性。三者均另有非缺值請求進入 17,365 個相異內容的
+需分類母體，依同一順序為 **69／40／206 筆請求**；因此不是三個帳號的
+全部流量都不可見。全體 241 筆橫跨 **12 天**，上述 174 筆橫跨 **8 天**；
+三個帳號在完整活動日期上沒有任何一天同時活動。
+
+### 可重現查詢
+
+以下查詢只讀 `src.extract_lite.load_dataset()` 載入的 L1 parquet，以及
+`prefilter.build()` 所用的既有 `markers_lite.parquet`；不打開 raw JSON，
+不讀或輸出 `prompt_text`，也不輸出任何 uid。從專案根目錄以 Python 執行：
+
+```python
+from src import extract_lite
+from src.classify_lite import prefilter
+
+frame = extract_lite.load_dataset()
+missing = frame["prompt_text_sha256"].isna()
+responses = missing & frame["endpoint"].eq("/v1/responses")
+
+# 只保留匿名帳號作分組鍵；輸出只有依缺值筆數排序後的計數。
+account_counts = frame.loc[responses, "anonymous_user_id"].value_counts()
+accounts = account_counts.index.tolist()
+
+assignments, _ = prefilter.build()
+eligible_sha = set(assignments.loc[
+    assignments["rule"].eq(prefilter.UNASSIGNED), "prompt_text_sha256"
+])
+eligible_counts = [
+    int((frame["anonymous_user_id"].eq(account)
+         & frame["prompt_text_sha256"].isin(eligible_sha)).sum())
+    for account in accounts
+]
+activity_days = [
+    set(frame.loc[frame["anonymous_user_id"].eq(account),
+                  "date_taipei"].astype(str))
+    for account in accounts
+]
+
+print("rows", len(frame))
+print("missing_sha", int(missing.sum()))
+print("missing_len", int(frame.loc[missing, "prompt_text_len"].isna().sum()))
+print("zero_len", int(frame.loc[missing, "prompt_text_len"].eq(0).sum()))
+print("responses_missing", int(responses.sum()))
+print("per_account_missing", account_counts.tolist())
+print("per_account_eligible", eligible_counts)
+print("all_missing_days", frame.loc[missing, "date_taipei"].nunique())
+print("responses_missing_days", frame.loc[responses, "date_taipei"].nunique())
+print("all_activity_three_way_day_intersection",
+      len(set.intersection(*activity_days)))
+```
+
+2026-09-15 實際重跑輸出為：
+
+```text
+rows 120520
+missing_sha 241
+missing_len 241
+zero_len 0
+responses_missing 174
+per_account_missing [99, 47, 28]
+per_account_eligible [69, 40, 206]
+all_missing_days 12
+responses_missing_days 8
+all_activity_three_way_day_intersection 0
+```
+
+三個缺口的因果層級不同，不能合併計算：
+
+- **21,099 筆上游排除**：記錄未交付，本機只有 manifest 計數。
+- **241 筆欄位缺值**：記錄已交付，但 `prompt_text_sha256` 與
+  `prompt_text_len` 缺值。
+- **欄位定義不含完整上下文**：記錄與 `prompt_text` 都已交付，但 lite 的
+  `prompt_text` 本來就不含 system、instructions 或對話歷史。
+
 ## 二、排除的分布
 
-排除**不是**平均散在 24 天，而是集中在兩天。
+排除**不是**平均散在全期，而是出現在三個擷取日：兩天大幅排除，第三天
+僅 68 筆（0.3%）。
 
 | 擷取目錄 | source_files | written_records | L1 列數 | excluded | 排除率 | 規則 4 請求 | 佔該日 |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -73,10 +178,13 @@ failed_files / failures         0 / 0
 ```
 date_dir 2026-07-30  →  date_taipei 2026-07-30（6,205 筆）+ 2026-07-31（164 筆）
 date_dir 2026-08-03  →  date_taipei 2026-08-03（2,217 筆）+ 2026-08-04（  421 筆）
+date_dir 2026-08-04  →  date_taipei 2026-08-04（21,804 筆）+ 2026-08-05（716 筆）
 ```
 
-**所以受影響的台北日期是 2026-07-30 與 2026-08-03**，其中 07-30 是
-本批資料的**第一天**。
+上面是**保留下來**的請求在台北日期上的分布。被排除記錄沒有時間戳，
+不能把三個擷取日的排除數精確分配到台北日期；尤其 08-04 的 68 筆究竟落在
+台北 08-04 或 08-05，現有材料無法判定。可確認的是三個 UTC 擷取日有缺口，
+其中 07-30 是本批資料的第一個擷取日。
 
 ## 三、已排除的一個候選解釋
 
@@ -87,7 +195,7 @@ date_dir 2026-08-03  →  date_taipei 2026-08-03（2,217 筆）+ 2026-08-04（  
 
 **分母有兩種，兩種都列，因為它們給的數字不同：**
 
-| 分母 | 07-30 | 08-03 | 其餘 20 天平均 |
+| 分母 | 07-30 | 08-03 | 其餘 21 天平均（含 08-04） |
 | --- | ---: | ---: | ---: |
 | 當日 `written_records`（＝表格第四欄的分母） | 9.9% | 11.8% | 7.6% |
 | 當日**有前置規則判定**的列（排除 <20 字元與無 `prompt_text` 者） | 11.2% | 13.4% | 9.1% |
@@ -106,10 +214,14 @@ date_dir 2026-08-03  →  date_taipei 2026-08-03（2,217 筆）+ 2026-08-04（  
   08-04 是 22,588，量級相當，卻一個排除 68.1%、一個排除 0.3%。
 - **(b) 那兩天真的有一批 internal prompt 的爆量。**
 
-**分不開，理由是被排除的記錄不在檔案裡。** 我們看得到的只有一個計數，
+08-04 仍有 68 筆被排除，08-05 起才連續為 0。這使「只有前兩天突發大量
+internal prompt、其餘日期完全沒有」的簡單版本較不貼合觀察；**較傾向**
+排除規則 08-04 仍在運作、但命中形態或規則本身已變，之後才停用或不再命中。
+這是方向性的判讀，**不是規則曾改變的結論**；68 筆也可能是正常背景量。
+
+**兩個解釋仍分不開，理由是被排除的記錄不在檔案裡。** 我們看得到的只有計數，
 沒有任何一筆被排除記錄的中繼資料——連時間、模型、識別碼都沒有。
-不管用什麼統計方法，**資料裡沒有可以區分這兩個解釋的變異**。
-只能問上游。
+現有資料不能確定變的是規則還是流量組成，只能問上游。
 
 ## 五、影響清單
 
@@ -123,8 +235,10 @@ date_dir 2026-08-03  →  date_taipei 2026-08-03（2,217 筆）+ 2026-08-04（  
   被排除記錄的 token 用量完全未知，所以缺口的大小無法估計，
   連上界都給不出來。
 - **`docs/data_lite/cost_by_day_lite.csv` 與 `docs/figures_lite/` 的日曲線
-  有兩天被截斷**，其中一天是資料的第一天。表上看不出來。
-- **24 天的期間敘述無誤**，但「每日用量」的可比性有兩天的缺口。
+  涉及三個有排除的 UTC 擷取日**：07-30、08-03 大幅排除，08-04 另有
+  68 筆（0.3%）。被排除記錄無時間戳，不能精確指認受影響的台北日期。
+- **24 天的期間敘述無誤**，但「每日用量」的可比性有兩個大缺口與一個
+  小缺口，不能把 08-04 寫成零排除。
 - **不受影響的項目：**
   - 73.12 小時服務中斷（台北 08-07 13:23 至 08-10 14:30）——那幾天排除為 0
   - 756 次限流（08-18 15:00 至 08-19 14:00）——排除為 0
@@ -145,12 +259,18 @@ date_dir 2026-08-03  →  date_taipei 2026-08-03（2,217 筆）+ 2026-08-04（  
    有中繼資料就能補上成本與規模的缺口。
 5. **被排除的記錄是否計入校方的實際帳單？** 這決定 `US$2,749.32`
    與帳單的差距是不是還要再加一項。
-6. **clean 批（7 月）是否有同樣的排除？** 那批的 manifest 未檢查；
-   若有，`turn_id` 那一組分析也要加同樣的但書。
+6. **clean 批（7 月）是否有同樣的排除？** 本機 `data/00_raw/` 沒有
+   `_prepare_report.json` 或等價批次報告；若有排除，`turn_id` 那一組分析
+   也要加同樣的但書。
 7. **同一個排除是否也套用在 `prompt_text` 之內？**
    即：一筆被保留的記錄，其 `prompt_text` 是否也被移除過片段？
    這與 `ref/annotation_protocol.md` 第一節〈可分類母數 17,365 的
    可分類性上限〉是同一個問題的兩面。
+8. **clean 批的原始擷取數、排除數及批次報告能否提供？** 本機
+   `data/00_raw/` 只有 `.gitkeep` 與 07-21、07-22 兩個目錄，內有
+   3,509 + 6,428 = 9,937 份 JSON，與本機 clean 請求數相符；
+   **這只證明本機一致，不證明上游未排除**。因此 clean 線已發表指標
+   的分母完整性目前沒有外部佐證。
 
 ## 七、規則 4 的時間集中（事實）
 

@@ -81,6 +81,12 @@ def stratified_estimates(sample: pd.DataFrame, opus: pd.DataFrame) -> dict:
             N * (part["n_requests"] * (part["domain"] == domain)).mean()
             for _, N, _, part in strata
         )
+        raw_known_share = estimated_requests / POPULATION_REQUESTS
+        var_raw_known = sum(
+            N ** 2 * (1 - n / N)
+            * (part["n_requests"] * (part["domain"] == domain)).var(ddof=1) / n
+            for _, N, n, part in strata
+        ) / POPULATION_REQUESTS ** 2
         p_request = estimated_requests / weighted_request_total
         var_request = sum(
             N ** 2 * (1 - n / N)
@@ -97,6 +103,11 @@ def stratified_estimates(sample: pd.DataFrame, opus: pd.DataFrame) -> dict:
             "content_share": p_content if observed_n >= 10 else None,
             "content_ci95": _interval(p_content, var_content) if observed_n >= 10 else None,
             "estimated_requests": estimated_requests,
+            "ratio_adjusted_requests": (estimated_requests * POPULATION_REQUESTS
+                                        / weighted_request_total),
+            "raw_known_request_share": raw_known_share if observed_n >= 10 else None,
+            "raw_known_request_ci95": (_interval(raw_known_share, var_raw_known)
+                                       if observed_n >= 10 else None),
             "request_share": p_request if observed_n >= 10 else None,
             "request_ci95": _interval(p_request, var_request) if observed_n >= 10 else None,
         })
@@ -107,6 +118,55 @@ def stratified_estimates(sample: pd.DataFrame, opus: pd.DataFrame) -> dict:
         "actual_request_total": POPULATION_REQUESTS,
         "domains": out,
         "below_min_group_size": [x["domain"] for x in out if x["sample_n"] < 10],
+    }
+
+
+def request_diagnostics(sample: pd.DataFrame, population: pd.DataFrame) -> dict:
+    """對照每層已知請求總數；輸出只含聚合與匿名最高貢獻，不含鍵。"""
+    key = REVIEW_COLUMNS[0]
+    sample, population = sample.copy(), population.copy()
+    sample["n_requests"] = pd.to_numeric(sample["n_requests"], errors="raise").astype(int)
+    population["n_requests"] = pd.to_numeric(population["n_requests"], errors="raise").astype(int)
+    if len(population) != POPULATION_N or population[key].duplicated().any():
+        raise ValueError("母體不是 17,365 個不重複相異內容")
+    if len(sample) != 600 or sample[key].duplicated().any():
+        raise ValueError("樣本不是 600 個不重複相異內容")
+    selected = population[[key, "unit_type", "length_stratum", "n_requests"]]
+    check = sample[[key, "unit_type", "length_stratum", "n_requests"]].merge(
+        selected, on=key, how="left", validate="one_to_one", suffixes=("_sample", "_population"))
+    if check["n_requests_population"].isna().any():
+        raise ValueError("樣本包含母體以外的內容")
+    for field in ("unit_type", "length_stratum", "n_requests"):
+        if not check[f"{field}_sample"].equals(check[f"{field}_population"]):
+            raise ValueError(f"樣本與母體的 {field} 不一致")
+    rows = []
+    largest = []
+    for name, part in sample.assign(
+        stratum=sample["unit_type"] + "|" + sample["length_stratum"]
+    ).groupby("stratum", sort=True):
+        pop = population[(population["unit_type"] + "|"
+                          + population["length_stratum"]) == name]
+        N, n = len(pop), len(part)
+        if (part["stratum_population"].astype(int) != N).any() or n < 2:
+            raise ValueError(f"{name} 的母體數或樣本數不一致")
+        weight = N / n
+        estimated = weight * pd.to_numeric(part["n_requests"]).sum()
+        actual = int(pd.to_numeric(pop["n_requests"]).sum())
+        rows.append({
+            "stratum": name, "population_contents": N, "sample_contents": n,
+            "weight": weight, "sample_requests": int(part["n_requests"].sum()),
+            "estimated_requests": estimated, "actual_requests": actual,
+            "overestimate": estimated - actual,
+        })
+        largest.extend({"stratum": name, "n_requests": int(count),
+                        "estimated_contribution": weight * int(count)}
+                       for count in part["n_requests"])
+    return {
+        "strata": rows,
+        "estimated_total": sum(x["estimated_requests"] for x in rows),
+        "actual_total": sum(x["actual_requests"] for x in rows),
+        "largest_items": sorted(largest, key=lambda x: x["estimated_contribution"],
+                                reverse=True)[:5],
     }
 
 

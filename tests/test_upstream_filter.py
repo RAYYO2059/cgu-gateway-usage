@@ -146,14 +146,84 @@ def test_逐日表的每一列都可從檔案重算():
 
 
 def test_只有三天有排除():
-    """第二節的「只有三天」是論證的核心——排除若平均散開，
-    第五節「兩天的日曲線被截斷」就不成立。"""
+    """第二節的三個擷取日與第五節的影響敘述必須一致。"""
     nz = {k: d["excluded_internal_prompts"] for k, d in _manifests().items()
           if d["excluded_internal_prompts"] > 0}
     assert set(nz) == {"2026-07-30", "2026-08-03", "2026-08-04"}
     doc = _doc()
     for k in nz:
         assert f"`{k}`" in doc
+
+
+def test_缺少_prompt_text_的請求與文件相符():
+    """只讀 L1 parquet；不打開原始 JSON，也不輸出任何識別碼。"""
+    df = _lite()
+    missing = df.prompt_text_sha256.isna()
+    responses = missing & df.endpoint.eq("/v1/responses")
+    counts = df.loc[responses, "anonymous_user_id"].value_counts()
+    assert len(df) == 120_520
+    assert int(missing.sum()) == 241
+    assert int(df.loc[missing, "prompt_text_len"].isna().sum()) == 241
+    assert int((df.loc[missing, "prompt_text_len"] == 0).sum()) == 0
+    assert int(responses.sum()) == 174
+    assert counts.tolist() == [99, 47, 28]
+    assert df.loc[missing, "date_taipei"].nunique() == 12
+    assert df.loc[responses, "date_taipei"].nunique() == 8
+    accounts = counts.index.tolist()
+    activity_days = [
+        set(df.loc[df["anonymous_user_id"].eq(account), "date_taipei"].astype(str))
+        for account in accounts
+    ]
+    assert len(set.intersection(*activity_days)) == 0
+
+    from src.classify_lite import prefilter
+    assignments, _ = prefilter.build()
+    eligible = set(assignments.loc[
+        assignments["rule"].eq(prefilter.UNASSIGNED), "prompt_text_sha256"
+    ])
+    eligible_counts = [
+        int((df["anonymous_user_id"].eq(account)
+             & df["prompt_text_sha256"].isin(eligible)).sum())
+        for account in accounts
+    ]
+    assert eligible_counts == [69, 40, 206]
+
+    doc = _doc()
+    for phrase in ("241 筆", "174 筆", "99／47／28", "69／40／206",
+                   "12 天", "8 天", "120,279 = 120,520 − 241"):
+        assert phrase in doc
+
+
+def test_clean_原始檔數只能佐證本機筆數():
+    """列檔名而不讀 JSON 內容；不能把檔數說成上游未排除的證據。"""
+    root = REPO / "data" / "00_raw"
+    paths = list(root.rglob("*.json"))
+    if not paths:
+        pytest.skip("clean 原始資料不在本機")
+    assert len(paths) == 9_937
+    assert {p.name for p in root.iterdir() if p.is_file()} == {".gitkeep"}
+    doc = _doc()
+    assert "3,509 + 6,428 = 9,937" in doc
+    assert "不證明上游未排除" in doc
+
+
+def test_三個擷取日與八個問題在公開檔和基準檔同步():
+    """只核對文件；以記憶體中的錯字突變確認斷言不是空真。"""
+    doc = _doc()
+
+    def check(text):
+        assert "三個擷取日" in text
+        assert "08-04" in text and "68 筆（0.3%）" in text
+        questions = text.split("## 六、待上游回覆的問題", 1)[1].split("## 七、", 1)[0]
+        assert len(re.findall(r"(?m)^\d+\. \*\*", questions)) == 8
+
+    check(doc)
+    with pytest.raises(AssertionError):
+        check(doc.replace("三個擷取日", "兩個擷取日"))
+    for name in ("CLAUDE.md", "AGENTS.md"):
+        baseline = (REPO / name).read_text(encoding="utf-8")
+        assert "三個擷取日" in baseline
+        assert "第六節有八個待問上游的問題" in baseline
 
 
 def test_台北日期的換算與實際相符():
