@@ -60,11 +60,12 @@ def run_all(run_id: str, only: str | None = None,
             continue
 
         target = out_dir / f"{spec.name}.csv"
-        result.data.to_csv(target, index=False, encoding="utf-8-sig")
+        result.data.to_csv(target, index=False, encoding="utf-8-sig", lineterminator="\n")
         if result.suppressed:
             (out_dir / f"{spec.name}.suppressed.json").write_text(
                 json.dumps(result.suppressed, ensure_ascii=False, indent=2),
                 encoding="utf-8",
+                newline="\n",
             )
 
         messages = list(result.warnings)
@@ -88,7 +89,7 @@ def run_all(run_id: str, only: str | None = None,
 
     summary = pd.DataFrame(rows, columns=list(SUMMARY_COLUMNS))
     summary_path = config.RUNS_DIR / run_id / "metrics_summary.csv"
-    summary.to_csv(summary_path, index=False, encoding="utf-8-sig")
+    summary.to_csv(summary_path, index=False, encoding="utf-8-sig", lineterminator="\n")
     logger.info("指標 %d 個（成功 %d、失敗 %d）→ %s",
                 len(summary), int((summary["狀態"] == "成功").sum()),
                 int((summary["狀態"] == "失敗").sum()), summary_path)

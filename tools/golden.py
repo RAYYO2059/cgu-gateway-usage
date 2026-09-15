@@ -465,6 +465,34 @@ def capture_snapshot(run_id: str) -> dict[str, Any]:
     }
 
 
+TEXT_SUFFIXES = frozenset({".csv", ".json", ".md"})
+
+
+def line_ending_targets(run_id: str, snapshot: Mapping[str, Any]) -> list[Path]:
+    """Files under the LF invariant: A, D, E outputs and the B source docs."""
+    run_dir = config.RUNS_DIR / run_id
+    targets = [PROJECT_ROOT / name for name in snapshot["A_files"]]
+    targets += [run_dir / name for name in snapshot["D_concentration"]]
+    targets += [run_dir / name for name in snapshot["E_metrics"]]
+    targets += [PROJECT_ROOT / path for path in DOC_PATHS]
+    return targets
+
+
+def carriage_return_files(paths: Iterable[Path]) -> list[str]:
+    """Text files containing any CR byte; independent of the manifest.
+
+    git stores these as LF (.gitattributes eol=lf). A CR in the working tree
+    means the bytes differ from git and from a run on another platform.
+    """
+    found: list[str] = []
+    for path in paths:
+        if path.suffix.lower() not in TEXT_SUFFIXES:
+            continue
+        if b"\r" in path.read_bytes():
+            found.append(relative(path))
+    return sorted(found)
+
+
 def compare_tests(
     expected: Mapping[str, Any], actual: Mapping[str, Any]
 ) -> dict[str, Any]:
@@ -773,6 +801,7 @@ def write_manifest(payload: Mapping[str, Any]) -> None:
     temporary.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
+        newline="\n",
     )
     os.replace(temporary, MANIFEST_PATH)
 
@@ -850,6 +879,7 @@ def execute(
         second_published = published_hashes()
         idempotency = idempotency_comparison(first_published, second_published)
         snapshot = capture_snapshot(run_id)
+        cr_files = carriage_return_files(line_ending_targets(run_id, snapshot))
     except Exception as exc:  # the program under test is broken: a mismatch
         print(f"golden: pipeline raised: {describe_exception(exc)}")
         print("golden: FAIL (the program under test raised; not a precondition)")
@@ -871,14 +901,24 @@ def execute(
     print_snapshot_report(
         mode, run_id, snapshot, comparison, idempotency, effective_strict, accepted
     )
+    print(f"LINE-ENDINGS {'FAIL' if cr_files else 'PASS'} files_with_cr={len(cr_files)}")
+    for name in cr_files:
+        print(f"  LINE-ENDINGS CR: {name}")
     report = compact_report(mode, run_id, snapshot, comparison, idempotency)
+    report["files_with_cr"] = cr_files
     report_path = config.RUNS_DIR / run_id / "golden_verify.json"
     report_path.write_text(
-        json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        json.dumps(report, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+        newline="\n",
     )
     print(f"report={relative(report_path)}")
 
     problems: list[str] = []
+    if cr_files:
+        problems.append(
+            f"text outputs contain CR bytes ({len(cr_files)} files); outputs must be LF"
+        )
     if not population_ok:
         problems.append(
             "eligible population fingerprint differs from the frozen value "

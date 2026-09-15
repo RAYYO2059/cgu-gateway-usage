@@ -172,7 +172,7 @@ def run(run_id: str) -> dict:
 
     user.to_parquet(USER_LITE_PATH, index=False)
     concentration_path = run_dir / "concentration_lite.csv"
-    concentration.to_csv(concentration_path, index=False, encoding="utf-8-sig")
+    concentration.to_csv(concentration_path, index=False, encoding="utf-8-sig", lineterminator="\n")
 
     logger.info("--- L2 lite 聚合報告 ---")
     logger.info("user_lite %5d 列 → %s", len(user), USER_LITE_PATH)

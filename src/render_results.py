@@ -536,7 +536,7 @@ def render_results(run_id: str) -> dict:
 
     changed = text != original
     if changed:
-        RESULTS_PATH.write_text(text, encoding="utf-8")
+        RESULTS_PATH.write_text(text, encoding="utf-8", newline="\n")
     return {
         "changed": changed,
         "filled": filled,
@@ -575,7 +575,7 @@ def write_prose_numbers(run_id: str) -> Path:
             sources[name] = path.read_text(encoding="utf-8")
     target = config.RUNS_DIR / run_id / "prose_numbers.txt"
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(prose_number_report(sources), encoding="utf-8")
+    target.write_text(prose_number_report(sources), encoding="utf-8", newline="\n")
     return target
 
 

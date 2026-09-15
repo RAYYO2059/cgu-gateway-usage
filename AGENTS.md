@@ -286,6 +286,11 @@ exit code `0` 表示通過。`1` 表示可比較但不一致，**包括管線執
 問題。`2` 只限前置條件不足：`docs/`／`README.md` 有未提交改動、manifest 不存在、
 套件版本與 manifest 不同、缺必要套件。
 
+文字輸出含 CR 視為失敗：A、D、E 類的 `.csv`／`.json`／`.md` 與五份渲染來源 md
+只要含 CR 位元組就判 `1`，verify 與 capture 皆然，與 manifest 無關。平台無關的
+靜態防護在 `tests/test_line_endings.py`：`src/`（不含 `classify_lite/`）與 `tools/`
+的 `to_csv` 必須帶 `lineterminator`，`write_text` 與文字模式 `open` 必須帶 `newline`。
+
 `capture` 在 manifest 已存在時先做與 `verify` 相同的比對，**只有 `--accept`
 列出的類別可以不一致**（例：`--accept A,B,E --reason "<為什麼>"`），其餘類別
 不一致就拒絕寫入並回 1；`--accept` 必須帶非空的 `--reason`。capture 時 C 類

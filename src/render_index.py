@@ -357,7 +357,7 @@ def render_readme() -> bool:
     check_bold_delimiters(updated, "README.md")
     if updated == original:
         return False
-    README_PATH.write_text(updated, encoding="utf-8")
+    README_PATH.write_text(updated, encoding="utf-8", newline="\n")
     return True
 
 
@@ -384,7 +384,7 @@ def render_index() -> bool:
     check_bold_delimiters(text, "docs/INDEX.md")
     if text == original:
         return False
-    INDEX_PATH.write_text(text, encoding="utf-8")
+    INDEX_PATH.write_text(text, encoding="utf-8", newline="\n")
     return True
 
 

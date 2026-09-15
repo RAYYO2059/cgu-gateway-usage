@@ -489,9 +489,9 @@ def run(run_id: str) -> dict:
     thread.to_parquet(THREAD_PATH, index=False)
     user.to_parquet(USER_PATH, index=False)
     concentration_path = run_dir / "concentration.csv"
-    concentration.to_csv(concentration_path, index=False, encoding="utf-8-sig")
+    concentration.to_csv(concentration_path, index=False, encoding="utf-8-sig", lineterminator="\n")
     summary_path = run_dir / "concentration_summary.csv"
-    concentration_summary.to_csv(summary_path, index=False, encoding="utf-8-sig")
+    concentration_summary.to_csv(summary_path, index=False, encoding="utf-8-sig", lineterminator="\n")
 
     n_compacted = int(turn["has_compaction"].sum())
     logger.info("--- L2 聚合報告 ---")

@@ -241,12 +241,16 @@ class FakeRun:
         self.snapshot = snapshot
         self.pipeline_error = pipeline_error
         self.pipeline_calls = 0
-        worktree = [{"status": " M", "path": "docs/OVERVIEW.md"}] if dirty else []
+        self.cr_targets: list[Path] = []
+        worktree =[{"status": " M", "path": "docs/OVERVIEW.md"}] if dirty else []
         monkeypatch.setattr(golden, "MANIFEST_PATH", self.manifest)
         monkeypatch.setattr(golden.config, "RUNS_DIR", self.runs)
         monkeypatch.setattr(golden, "check_worktree", lambda: list(worktree))
         monkeypatch.setattr(golden, "environment_versions", lambda: dict(environment))
         monkeypatch.setattr(golden, "run_pipeline", self._pipeline)
+        monkeypatch.setattr(
+            golden, "line_ending_targets", lambda run_id, snapshot: list(self.cr_targets)
+        )
         monkeypatch.setattr(
             golden, "published_hashes", lambda: {"files": {}, "autogen": {}, "docs": {}}
         )
@@ -568,3 +572,104 @@ def test_verify_passes_when_only_new_tests_were_added(
     fake = FakeRun(monkeypatch, tmp_path, grown)
     _write_baseline(fake.manifest, _passing_snapshot())
     assert golden.execute("verify", strict_docs=False) == 0
+
+
+# ---------------------------------------------------------------------------
+# Line endings: text outputs must be LF, independent of the manifest.
+# ---------------------------------------------------------------------------
+
+CR = bytes([13])
+LF = bytes([10])
+
+
+def test_carriage_return_files_flags_text_outputs_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(golden, "PROJECT_ROOT", tmp_path)
+    contents = {
+        "crlf.csv": b"a,b" + CR + LF + b"1,2" + CR + LF,
+        "lone_cr.json": b"{}" + CR,
+        "doc.md": b"text" + CR + LF,
+        "clean.csv": b"a,b" + LF + b"1,2" + LF,
+        "figure.png": bytes([0x89]) + b"PNG" + CR + LF,
+    }
+    paths = []
+    for name, data in contents.items():
+        path = tmp_path / name
+        path.write_bytes(data)
+        paths.append(path)
+    assert golden.carriage_return_files(paths) == ["crlf.csv", "doc.md", "lone_cr.json"]
+
+
+def test_line_ending_targets_cover_a_d_e_and_doc_sources(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runs = tmp_path / "runs"
+    monkeypatch.setattr(golden, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(golden.config, "RUNS_DIR", runs)
+    monkeypatch.setattr(golden, "DOC_PATHS", (Path("README.md"),))
+    snapshot = _snapshot()
+    snapshot["A_files"] = {"docs/data/a.csv": "x"}
+    snapshot["D_concentration"] = {"concentration.csv": "x"}
+    snapshot["E_metrics"] = {"metrics/a.suppressed.json": "x"}
+    for path in (
+        tmp_path / "docs" / "data" / "a.csv",
+        runs / "RUN" / "concentration.csv",
+        runs / "RUN" / "metrics" / "a.suppressed.json",
+        tmp_path / "README.md",
+    ):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"x" + CR + LF)
+    targets = golden.line_ending_targets("RUN", snapshot)
+    assert golden.carriage_return_files(targets) == [
+        "README.md",
+        "docs/data/a.csv",
+        "runs/RUN/concentration.csv",
+        "runs/RUN/metrics/a.suppressed.json",
+    ]
+
+
+def _output_file(tmp_path: Path, data: bytes) -> Path:
+    path = tmp_path / "docs" / "data" / "a.csv"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+    return path
+
+
+def test_verify_returns_one_when_outputs_contain_cr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fake = FakeRun(monkeypatch, tmp_path, _passing_snapshot())
+    monkeypatch.setattr(golden, "PROJECT_ROOT", tmp_path)
+    _write_baseline(fake.manifest, _passing_snapshot())
+    fake.cr_targets = [_output_file(tmp_path, b"a" + CR + LF)]
+    assert golden.execute("verify", strict_docs=False) == 1
+    out = capsys.readouterr().out
+    assert "LINE-ENDINGS FAIL files_with_cr=1" in out
+    assert "LINE-ENDINGS CR: docs/data/a.csv" in out
+    assert "outputs must be LF" in out
+
+
+def test_verify_passes_when_outputs_are_lf(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fake = FakeRun(monkeypatch, tmp_path, _passing_snapshot())
+    _write_baseline(fake.manifest, _passing_snapshot())
+    fake.cr_targets = [_output_file(tmp_path, b"a" + LF)]
+    assert golden.execute("verify", strict_docs=False) == 0
+    assert "LINE-ENDINGS PASS files_with_cr=0" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("existing", [False, True], ids=("first-capture", "recapture"))
+def test_capture_writes_nothing_when_outputs_contain_cr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, existing: bool
+) -> None:
+    fake = FakeRun(monkeypatch, tmp_path, _changed_files_snapshot())
+    before = _write_baseline(fake.manifest, _passing_snapshot()) if existing else None
+    fake.cr_targets = [_output_file(tmp_path, b"a" + CR + LF)]
+    options = {"accept": ["A"], "reason": "drill"} if existing else {}
+    assert golden.execute("capture", strict_docs=False, **options) == 1
+    if existing:
+        assert fake.manifest.read_bytes() == before
+    else:
+        assert not fake.manifest.exists()

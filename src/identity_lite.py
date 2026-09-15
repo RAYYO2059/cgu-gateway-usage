@@ -105,7 +105,7 @@ def account_collisions(frame: pd.DataFrame) -> pd.DataFrame:
 
 def save_registry(registry: pd.DataFrame) -> None:
     config.REF_DIR.mkdir(parents=True, exist_ok=True)
-    registry.to_csv(REGISTRY_PATH, index=False, encoding="utf-8-sig")
+    registry.to_csv(REGISTRY_PATH, index=False, encoding="utf-8-sig", lineterminator="\n")
 
 
 def run(frame: pd.DataFrame | None = None) -> pd.DataFrame:

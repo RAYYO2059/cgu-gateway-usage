@@ -147,7 +147,7 @@ def main() -> int:
         run_dir.mkdir(parents=True, exist_ok=True)
         target = run_dir / "run_manifest.json"
         target.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-                          encoding="utf-8")
+                          encoding="utf-8", newline="\n")
         print(f"  {order}. {run_id}")
         print(f"     {payload['status']:<8} 列數 {rows:>7,}  檔 {len(files):>2}  "
               f"分區 {len(partitions):>2}  chunk {len(chunks)}")

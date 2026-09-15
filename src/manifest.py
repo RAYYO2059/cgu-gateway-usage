@@ -154,6 +154,7 @@ class RunManifest:
         target.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
+            newline="\n",
         )
         logger.info("run_manifest：%s（%s，階段 %s）",
                     target, payload["status"], " → ".join(self.stages) or "無")

@@ -298,7 +298,7 @@ def render_results_lite(run_id: str) -> dict:
 
     changed = text != original
     if changed:
-        RESULTS_LITE_PATH.write_text(text, encoding="utf-8")
+        RESULTS_LITE_PATH.write_text(text, encoding="utf-8", newline="\n")
     return {"changed": changed, "filled": filled, "missing_keys": missing_keys,
             "unknown_keys": unknown, "unmapped_metrics": unmapped}
 
@@ -343,7 +343,7 @@ def render_overview(run_id: str) -> dict:
     render_index.check_bold_delimiters(text, "docs/OVERVIEW.md")
     changed = text != original
     if changed:
-        OVERVIEW_PATH.write_text(text, encoding="utf-8")
+        OVERVIEW_PATH.write_text(text, encoding="utf-8", newline="\n")
     return {"changed": changed, "filled": filled, "missing_keys": missing}
 
 
@@ -367,7 +367,7 @@ def render_index_lite() -> bool:
     render_index.check_bold_delimiters(text, "docs/INDEX.md")
     if text == original:
         return False
-    INDEX_PATH.write_text(text, encoding="utf-8")
+    INDEX_PATH.write_text(text, encoding="utf-8", newline="\n")
     return True
 
 
@@ -425,7 +425,7 @@ def render_readme_lite(run_id: str) -> bool:
     render_index.check_bold_delimiters(text, "README.md")
     if text == original:
         return False
-    path.write_text(text, encoding="utf-8")
+    path.write_text(text, encoding="utf-8", newline="\n")
     return True
 
 
