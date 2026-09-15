@@ -1,6 +1,7 @@
 # 進度報告：2026-08-27
 
-本文件為階段性快照，非最終報告。完整敘述見 [OVERVIEW.md](OVERVIEW.md)（撰寫中）。
+**這是階段性快照，不是現況。** 現況見 [OVERVIEW.md](OVERVIEW.md) 與
+[CLASSIFICATION_LIMITS.md](CLASSIFICATION_LIMITS.md)；下文保留當時內容，不隨現況回填。
 
 ---
 
