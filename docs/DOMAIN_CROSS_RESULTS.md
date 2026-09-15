@@ -2,8 +2,9 @@
 
 > 產生時間：2026-09-14 09:37（Asia/Taipei）；分層推論與中繼資料盤點更新：2026-09-14 10:10（Asia/Taipei）
 > 請求比值校準與 A032 中繼資料補充：2026-09-14（Asia/Taipei）
-> 版本：1.2
-> 本檔是固定 600 筆樣本的模型產生結果，沒有獨立人工參考標籤；不稱為已驗證的用途分類。`docs/OVERVIEW.md` 第四節只以探索性模型估計與未解異常呈現，不作正式用途分布結論。
+> 第三人標記人工逐筆審閱：2026-09-15（Asia/Taipei）
+> 版本：1.3
+> 本檔的 domain 結果來自固定 600 筆樣本的模型判定，沒有獨立人工參考標籤；不稱為已驗證的用途分類。`named_third_party` 的聯集另有下述人工逐筆審閱，不變更 domain 的驗證狀態。`docs/OVERVIEW.md` 第四節只以探索性模型估計與未解異常呈現，不作正式用途分布結論。
 
 ## 指標說明
 
@@ -21,7 +22,15 @@ Opus（`claude-opus-5`）與 Codex（`gpt-5.6-sol`）各完成 600/600，最終�
 
 正式 600 筆中有 **281 筆（46.8%）**在 1,200 字元截斷。Opus 最終輸出失敗 0、工具事件 0；Codex 最終輸出失敗 0、工具事件 0。Opus `prompt_tokens_total` 最小值 **3,158**，缺值 0。Opus 成功列的 CLI 回報估算成本合計 **US$23.680861**；先前未寫入結果的失敗嘗試不在此數，且此數不併入資料集牌價等值成本 US$2,749.32。
 
-`named_third_party=true`：Opus 23 筆、Codex 29 筆、交集 16 筆、聯集 **36 筆**。這是模型標記的計數，沒有人工核對。供 Ray 在自己的終端審查的聯集清單是 repo 外 `_rescued_scratchpad/domain_named_third_party_union.csv`，恰好只有 `prompt_text_sha256,source_path` 兩欄；本報告不列逐筆識別碼、路徑或內容，也不標出由哪個模型標記。
+`named_third_party=true`：Opus 23 筆、Codex 29 筆、交集 16 筆、聯集 **36 筆**。聯集清單是 repo 外 `_rescued_scratchpad/domain_named_third_party_union.csv`，恰好只有 `prompt_text_sha256,source_path` 兩欄；審閱紀錄是 repo 外 `_rescued_scratchpad/named_third_party_review.csv`，只有 sha256、三值答案、耗時與時間。本報告不列逐筆識別碼、路徑或內容，也不標出由哪個模型標記。
+
+### 第三人標記的人工逐筆審閱
+
+兩模型標記聯集的 36 筆中，單一標註者人工判為 `yes` **5 筆**、`no` **31 筆**、`unsure` **0 筆**。以人工判定為參照，聯集標記的精確率為 **5/36（13.9%）**。其餘 564 筆未被任一模型標記的樣本沒有接受人工審閱，因此召回率未量測。
+
+逐筆審閱耗時中位數為 **11.1 秒**；`yes` 為 **23.4 秒**、`no` 為 **10.7 秒**，前者為後者的 **2.2 倍**。三批各 12 筆，`yes` 分布為 **2／1／2**，逐批耗時中位數的未捨入值為 **16.05／8.0／8.5 秒**。這是單一標註者的一次審閱，沒有做自我一致率重標。結果對少數翻轉的方向穩健：即使 31 個 `no` 中有 2 個翻為 `yes`，精確率也只由 **13.9%** 變為 **7/36（19.4%）**。
+
+舊 150 筆材料明列病人臨床紀錄 **8/150（5.3%）**。這個數字與本次精確率**不可並排比較**：前者是舊樣本中一類第三人材料的密度，後者是先經兩模型聯集篩選後的陽性預測值。若 5.3% 的密度可轉移，600 筆應約有 **32 筆**；現有材料無法區分三種解釋：模型漏抓、兩份樣本的母體與分層不同，或本次人工判準較嚴；其中兩種解釋指向召回率不佳。舊 150 筆的原抽樣已遺失且不可重現，所以這個對照只是提示，不是估計。
 
 ## 樣本分布與逐類一致率
 
@@ -230,7 +239,8 @@ instructions／history，也不證明完整請求都在 `prompt_text`**；本檔
 | repo 外 `_rescued_scratchpad/judge_domain_output.csv` | 2026-09-14 09:32:36 +08:00 | `11e99c8263c550cb8218ae9d2ff004def7c5eba3ff7ba6fe035f0413848c73bd` |
 | repo 外 `codex_domain_blind_2026-09/codex_domain_output.csv` | 2026-09-12 22:22:16 +08:00 | `63bd9feebbd595f976da8813544d86214c03d4adac4fa218f638fa5b3befb52b` |
 | repo 外 `_rescued_scratchpad/domain_named_third_party_union.csv` | 2026-09-14 產生；36 列、兩欄 | `4109a24a2cfcb1276b65b1632c1b3e357bbb13fba2c684a2998b47c6bc032d35` |
+| repo 外 `_rescued_scratchpad/named_third_party_review.csv` | 2026-09-15 21:29:58 +08:00；36 列、四欄 | `95d430d37dc345fa91fdcb2a030f280ab331b0976d151df74a4236873946cdc8` |
 | `src/classify_lite/summarize_domain_cross.py` | 版本庫程式 | 固定 600 分母、只輸出安全聚合；`python -m src.classify_lite.summarize_domain_cross` 重算 |
 | `src/classify_lite/analyze_domain_population.py` | 2026-09-14 新增 | 以精確 `N_h/n_h` 計算分層估計與區間，盤點 13 筆非明文中繼資料，產生第三人標記聯集清單；`python -m src.classify_lite.analyze_domain_population` 重算 |
 
-本文件不包含原文、逐筆 sha256、`source_path` 或具名第三人資訊。三個正式資料檔與第三人聯集清單都在 repo 外；換機器時必須另行保留，不能只靠本文件重建模型判定。
+本文件不包含原文、逐筆 sha256、`source_path` 或具名第三人資訊。三個正式資料檔、第三人聯集清單與人工審閱紀錄都在 repo 外；換機器時必須另行保留，不能只靠本文件重建模型判定或審閱結果。
