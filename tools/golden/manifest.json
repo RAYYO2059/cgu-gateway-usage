@@ -102,7 +102,7 @@
       }
     },
     "C_docs": {
-      "README.md": "a65592af3fd84115d6b0f125224b245b186918b6966ca70006cf26769373c075",
+      "README.md": "0f9b303dd90f576026a0b56152e579a1f5562880aed8cbdd3a755555ba35002f",
       "docs/INDEX.md": "77359e71ccda384bb29e5880ff855979da3b3364654c224d0af6a39f1d6103b3",
       "docs/OVERVIEW.md": "cf538465e7a4fb881cee464456f5262245d8a3ee338a8d2e45607229c65c5999",
       "docs/RESULTS.md": "d0e49159329b18ec56bf9bb929105eea956339c4f27e2887fce623129fbde00c",
@@ -278,6 +278,71 @@
         "C": {
           "old": "7a4b2b656c21",
           "new": "f51f19e12022"
+        },
+        "D": {
+          "old": "f95a0d992d4b",
+          "new": "f95a0d992d4b"
+        },
+        "E": {
+          "old": "c5f0802e4cf8",
+          "new": "c5f0802e4cf8"
+        },
+        "F": {
+          "old": "f4c549d9afac",
+          "new": "f4c549d9afac"
+        },
+        "G": {
+          "old": "2512724b078d",
+          "new": "2512724b078d"
+        },
+        "H": {
+          "old": "348f76015693",
+          "new": "348f76015693"
+        },
+        "I": {
+          "old": "7273a291d90e",
+          "new": "7273a291d90e"
+        }
+      }
+    },
+    {
+      "captured_at": "2026-09-16T22:47:34+08:00",
+      "initial": false,
+      "accepted": [
+        "C"
+      ],
+      "accept_environment": false,
+      "reason": "P1：README 改為結論首頁，新增 docs/README.md；AUTOGEN 區塊內容不變",
+      "git_head": "332d8241df26f682f22ff3b2f4873b610d6695d9",
+      "git_tracked_changes": false,
+      "environment": {
+        "python": "3.12.7",
+        "pandas": "2.3.1",
+        "pyarrow": "21.0.0",
+        "numpy": "2.3.1",
+        "matplotlib": "3.10.3",
+        "pandera": "0.32.1"
+      },
+      "previous_environment": {
+        "python": "3.12.7",
+        "pandas": "2.3.1",
+        "pyarrow": "21.0.0",
+        "numpy": "2.3.1",
+        "matplotlib": "3.10.3",
+        "pandera": "0.32.1"
+      },
+      "categories": {
+        "A": {
+          "old": "9d78807aaad8",
+          "new": "9d78807aaad8"
+        },
+        "B": {
+          "old": "d5daddb4f16d",
+          "new": "d5daddb4f16d"
+        },
+        "C": {
+          "old": "f51f19e12022",
+          "new": "263c742a25b0"
         },
         "D": {
           "old": "f95a0d992d4b",
