@@ -62,3 +62,7 @@ venv/
 # 多數人的全域 gitignore 已經擋掉它，但那條規則跟著機器不跟著專案：
 # 換一台機器或別人 clone 之後它會突然變成未追蹤檔冒出來。
 .claude/settings.local.json
+
+# --- Cowork 輸出 ---
+# 對話端的交付檔會同步到這裡（提示詞、草稿），不是專案成品。
+/Claude outputs/
