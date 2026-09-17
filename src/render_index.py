@@ -156,7 +156,7 @@ def build_suppression_block(line: str) -> str:
     """某一條線的抑制說明。維度清單依線別查表，不寫死 clean 的那兩份。"""
     from src.metrics.registry import dimension_lists
 
-    concentration, _exempt_dims = dimension_lists(line)
+    concentration, _exempt_dims, _non_person = dimension_lists(line)
     specs = registry.list_metrics(line)
     grouped = [s for s in specs if s.group_by]
     suppressed = [s for s in grouped

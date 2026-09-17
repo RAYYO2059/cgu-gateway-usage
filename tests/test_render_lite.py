@@ -45,6 +45,18 @@ def test_兩條線同時載入時_clean_的表只列_clean():
         assert f"`{spec.name}`" not in lite_table, "lite 的表裡出現了 clean 指標"
 
 
+def test_兩條線的抑制說明區塊都產得出來():
+    """dimension_lists 的回傳形狀改過一次，這支呼叫端沒跟上，管線在發佈時才炸。
+
+    pytest 當時全綠，因為沒有任何測試呼叫它。
+    """
+    import src.metrics_lite  # noqa: F401
+
+    for line in ("clean", "lite"):
+        block = render_index.build_suppression_block(line)
+        assert "受抑制的維度" in block
+
+
 def test_readme_區塊的計數以_clean_為範圍():
     """README 描述已發佈的 clean 那條線，lite 被 import 也不該改變它的數字。"""
     import src.metrics_lite  # noqa: F401
