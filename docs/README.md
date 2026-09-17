@@ -41,6 +41,7 @@
 | [RUNBOOK_lite.md](RUNBOOK_lite.md) | 拿到新一批 lite 匯出時怎麼擴充與重跑，哪些地方會出錯、為什麼 |
 | [ENGINEERING_NOTES.md](ENGINEERING_NOTES.md) | 可以帶到其他專案的通用工程規則，每條附原始案例 |
 | [PROGRESS.md](PROGRESS.md) | 2026-08-27 的階段性快照。**不是現況**，保留作為過程紀錄 |
+| [MAINTAINING.md](MAINTAINING.md) | 要改程式或文件的人動手前必讀：驗收指令、禁止事項、遮蔽規則與凍結座標 |
 
 ## 資料與圖
 
