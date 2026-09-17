@@ -51,4 +51,4 @@
 | [../ref/college_mapping.csv](../ref/college_mapping.csv) | 系所代碼 → 學院的人工對照表 |
 | [../ref/pricing_table.csv](../ref/pricing_table.csv) | 牌價表，含生效日分段與逐價位的可靠度標記 |
 
-發佈的 csv 都已套用抑制規則：以人為分組單位的比例，在母數不足或單人佔比過高時顯示為空值，並在 `suppression_reason` 欄說明原因，計數則保留。原始日誌、parquet 與帳號對照表含個資，不在 repo 裡。
+發佈的 csv 都已套用抑制規則：以人為分組單位的比例，在母數不足或單人佔比過高時顯示為空值，並在 `suppression_reason` 欄說明原因，計數則保留；明確登記為非自然人的分組（如服務憑證）只受母數規則約束，單人佔比過高不觸發抑制，理由欄會註明「非自然人分組」。原始日誌、parquet 與帳號對照表含個資，不在 repo 裡。

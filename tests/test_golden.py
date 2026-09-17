@@ -601,6 +601,14 @@ def test_carriage_return_files_flags_text_outputs_only(
     assert golden.carriage_return_files(paths) == ["crlf.csv", "doc.md", "lone_cr.json"]
 
 
+def test_metric_files_include_both_suppression_sidecars() -> None:
+    assert set(golden.METRIC_FILE_PATTERNS) == {
+        "*.csv",
+        "*.suppressed.json",
+        "*.exempted.json",
+    }
+
+
 def test_line_ending_targets_cover_a_d_e_and_doc_sources(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -67,10 +67,21 @@ def run_all(run_id: str, only: str | None = None,
                 encoding="utf-8",
                 newline="\n",
             )
+        # 豁免另存一份，不併進 suppressed.json：後者的契約是「這些格子真的
+        # 被改成 NA」，render 層靠它決定哪個破折號要配註腳。混在一起會讓
+        # 完好的數字配上一句「已抑制」。
+        if result.exempted:
+            (out_dir / f"{spec.name}.exempted.json").write_text(
+                json.dumps(result.exempted, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+                newline="\n",
+            )
 
         messages = list(result.warnings)
         for item in result.suppressed:
             messages.append(f"抑制 {item['維度']}={item['分組值']}（{item['原因']}）")
+        for item in result.exempted:
+            messages.append(f"豁免 {item['維度']}={item['分組值']}（{item['原因']}）")
         rows.append({
             "name": spec.name, "question": spec.question, "unit": spec.unit,
             "source": spec.source, "coverage": round(result.coverage, 4),
@@ -84,6 +95,8 @@ def run_all(run_id: str, only: str | None = None,
         )
         for item in result.suppressed:
             logger.info("    抑制 %s=%s：%s", item["維度"], item["分組值"], item["原因"])
+        for item in result.exempted:
+            logger.info("    豁免 %s=%s：%s", item["維度"], item["分組值"], item["原因"])
         for warning in result.warnings:
             logger.warning("    %s：%s", spec.name, warning)
 

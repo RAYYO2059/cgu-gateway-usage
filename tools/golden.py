@@ -433,6 +433,13 @@ def pytest_result(run_id: str) -> dict[str, Any]:
     }
 
 
+# E metrics: every csv plus both sidecars.  suppressed.json decides which cells
+# print as a dash; exempted.json decides which non-person rows keep their ratio
+# and carry an exemption footnote.  Either one drifting changes the published
+# docs, so both are locked.
+METRIC_FILE_PATTERNS = ("*.csv", "*.suppressed.json", "*.exempted.json")
+
+
 def capture_snapshot(run_id: str) -> dict[str, Any]:
     published = published_hashes()
     run_dir = config.RUNS_DIR / run_id
@@ -450,7 +457,7 @@ def capture_snapshot(run_id: str) -> dict[str, Any]:
             Path("runs") / run_id / "metrics",
             Path("runs") / run_id / "metrics_lite",
         ),
-        ("*.csv", "*.suppressed.json"),
+        METRIC_FILE_PATTERNS,
     )
     return {
         "A_files": published["files"],

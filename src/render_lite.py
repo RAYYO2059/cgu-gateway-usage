@@ -81,9 +81,10 @@ OVERVIEW_PATH = config.DOCS_DIR / "OVERVIEW.md"
 # 數字仍由管線產生，被裁掉的欄位仍在連結的 csv 裡。
 OVERVIEW_BLOCKS = {
     # request_share 與 attributable_share 並列，是為了讓「分母不同」變成
-    # 看得見的事實而不是靠散文解釋：前者的分母是全部 120,520 筆（所以各列
-    # 加不到 100%），後者只有可歸屬到個人的 60,445 筆。同一張表上並排，
-    # 讀者不會把「加不起來」讀成算錯。
+    # 看得見的事實而不是靠散文解釋：前者的分母是全部 120,520 筆（服務憑證
+    # 也有值，六列合計約 100%），後者只有可歸屬到個人的 60,445 筆（服務憑證
+    # 不在其內，印「不適用」，其餘五列合計 100%）。同一張表上並排，讀者不會
+    # 把兩欄的數字讀成同一個分母。
     "UNIT_MAIN": ("requests_by_unit_lite",
                   ["unit", "unit_type", "n_users", "n_requests",
                    "request_share", "attributable_share",
@@ -148,28 +149,24 @@ OVERVIEW_RENAME = {
 DOCS_FIGURES_LITE_DIR = config.DOCS_DIR / "figures_lite"
 
 
-# 總覽的表把兩種空格分開印。**不套用在 RESULTS_lite.md**：那份沿用既有慣例
-# （一律 —），改了它會動到已發佈的輸出。
+# 總覽的表把兩種空格分開印。RESULTS_lite.md 只在 NA_MARKER_METRICS 那兩張表
+# 套用：服務憑證那一列的空格是「不在母體」。其餘表的空格多半是「算不出來」
+# （例如未計價模型的金額），印成「不適用」是錯的，所以維持 —。
 NA_MARKER = "不適用"
+NA_MARKER_METRICS = frozenset({"requests_by_unit_lite", "cost_by_unit_lite"})
 
 
-def _suppressed_cells(run_id: str, name: str, frame) -> set:
-    """哪些 (列, 欄) 是真的被抑制的。
-
-    來源是 sidecar 的「被抑制欄位」，而那一欄只列 apply_suppression **真的
-    改動過**的欄位——抑制前就是 NA 的格子不算。少了這個區分，服務憑證那一列的
-    request_share（被抑制）與 attributable_share（不在母體）會印成同一個破折號，
-    而它們的意思相反。
-    """
+def _sidecar_cells(run_id: str, name: str, frame, kind: str,
+                   column_key: str) -> set:
     import json
 
-    path = config.RUNS_DIR / run_id / "metrics_lite" / f"{name}.suppressed.json"
+    path = config.RUNS_DIR / run_id / "metrics_lite" / f"{name}.{kind}.json"
     if not path.exists():
         return set()
     cells = set()
     for item in json.loads(path.read_text(encoding="utf-8")):
         dimension, value = item["維度"], str(item["分組值"])
-        columns = [c for c in item["被抑制欄位"].split(",") if c]
+        columns = [c for c in item[column_key].split(",") if c]
         if dimension not in frame.columns:
             continue
         mask = frame[dimension].astype(str) == value
@@ -177,6 +174,26 @@ def _suppressed_cells(run_id: str, name: str, frame) -> set:
             for column in columns:
                 cells.add((index, column))
     return cells
+
+
+def _suppressed_cells(run_id: str, name: str, frame) -> set:
+    """哪些 (列, 欄) 是真的被抑制的。
+
+    來源是 sidecar 的「被抑制欄位」，而那一欄只列 apply_suppression **真的
+    改動過**的欄位——抑制前就是 NA 的格子不算。少了這個區分，某單位的
+    request_share（被抑制）與服務憑證的 attributable_share（不在母體）會印成
+    同一個破折號，而它們的意思相反。
+    """
+    return _sidecar_cells(run_id, name, frame, "suppressed", "被抑制欄位")
+
+
+def _exempted_cells(run_id: str, name: str, frame) -> set:
+    """哪些 (列, 欄) 是非自然人豁免、數字照常公布的。
+
+    來源是 exempted.json 的「未抑制欄位」。註腳層靠它判斷表上有沒有印出
+    豁免的格子——與 _suppressed_cells 對抑制註腳的作用相同。
+    """
+    return _sidecar_cells(run_id, name, frame, "exempted", "未抑制欄位")
 
 
 def _import_lite_metrics() -> None:
@@ -271,8 +288,11 @@ def render_results_lite(run_id: str) -> dict:
             body = (EMPTY_BLOCK_MESSAGES[name] + "\n\n"
                     + f"完整資料：[{name}.csv]({DATA_LINK_DIR}/{name}.csv)")
         else:
-            body = render_results.render_block(frame, name,
-                                               data_dir=DATA_LINK_DIR)
+            body = render_results.render_block(
+                frame, name, data_dir=DATA_LINK_DIR,
+                suppressed_cells=_suppressed_cells(run_id, name, frame),
+                exempted_cells=_exempted_cells(run_id, name, frame),
+                na_marker=NA_MARKER if name in NA_MARKER_METRICS else None)
         text, ok = render_results.replace_block(text, key, body)
         if ok:
             filled.append(key)
@@ -329,6 +349,7 @@ def render_overview(run_id: str) -> dict:
             frame, name, data_dir=DATA_LINK_DIR,
             columns=columns, rename=OVERVIEW_RENAME,
             suppressed_cells=_suppressed_cells(run_id, name, frame),
+            exempted_cells=_exempted_cells(run_id, name, frame),
             na_marker=NA_MARKER)
         text, ok = render_results.replace_block(text, key, body)
         if ok:

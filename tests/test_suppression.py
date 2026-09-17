@@ -162,6 +162,119 @@ def test_自訂清單不影響模組層級常數():
         "hour_taipei", "endpoint", "model_family", "reasoning_effort")
 
 
+# --- P0 不變量：非自然人豁免上線前後都必須成立 -----------------------------
+#
+# 這四條在**改動之前**就要通過，用意是「先立不變量，再改語意」：豁免只能
+# 動到「明確登記的維度 × 明確登記的值 × 只因 dominant 被擋」那一格，其餘
+# 全部照舊。刻意不在這裡鎖住「服務憑證 + dominant 會被抑制」——那正是
+# 這一輪要改掉的行為，把它寫成測試會讓改動變成「改測試遷就程式」。
+def test_不變量_自然人分組命中dominant仍被抑制():
+    spec = make_spec(["unit"])
+    result = make_result("unit", ["醫學院", "工學院"])
+    rules = make_rules("unit", "醫學院", dominant=True)
+    out = registry.apply_suppression(
+        spec, result, rules, dimensions=("unit",), exempt=())
+
+    row = out.data[out.data["unit"] == "醫學院"].iloc[0]
+    assert pd.isna(row["request_share"])
+    assert "單人佔" in row[registry.REASON_COLUMN]
+    assert len(out.suppressed) == 1
+
+
+def test_不變量_未登記為非自然人的值命中dominant仍被抑制():
+    # 教職員是人，即使與服務憑證同在 unit 維度也不得豁免。
+    spec = make_spec(["unit"])
+    result = make_result("unit", ["教職員", "工學院"])
+    rules = make_rules("unit", "教職員", dominant=True)
+    out = registry.apply_suppression(
+        spec, result, rules, dimensions=("unit",), exempt=())
+
+    row = out.data[out.data["unit"] == "教職員"].iloc[0]
+    assert pd.isna(row["request_share"])
+    assert len(out.suppressed) == 1
+
+
+def test_不變量_同一個值出現在別的維度仍被抑制():
+    # 防的是「只比對值、不比對維度」的實作。degree 底下就算出現同名值，
+    # 也與非自然人登記無關。
+    spec = make_spec(["degree"])
+    result = make_result("degree", ["服務憑證", "M"])
+    rules = make_rules("degree", "服務憑證", dominant=True)
+    out = registry.apply_suppression(
+        spec, result, rules, dimensions=("degree",), exempt=())
+
+    row = out.data[out.data["degree"] == "服務憑證"].iloc[0]
+    assert pd.isna(row["request_share"])
+    assert len(out.suppressed) == 1
+
+
+def test_不變量_命中母數門檻一律仍被抑制():
+    # 服務憑證背後可能是某個人自建的服務，母數少時仍有再識別風險，
+    # 所以 below_min_group_size 這一條不在豁免範圍內。
+    spec = make_spec(["unit"])
+    result = make_result("unit", ["服務憑證", "工學院"])
+    rules = make_rules("unit", "服務憑證", below=True)
+    out = registry.apply_suppression(
+        spec, result, rules, dimensions=("unit",), exempt=())
+
+    row = out.data[out.data["unit"] == "服務憑證"].iloc[0]
+    assert pd.isna(row["request_share"])
+    assert "母數" in row[registry.REASON_COLUMN]
+    assert len(out.suppressed) == 1
+
+
+# --- P0 新行為：非自然人分組豁免 dominant ----------------------------------
+def test_非自然人分組命中dominant且未命中母數門檻時比例保留():
+    spec = make_spec(["account_type"])
+    result = make_result("account_type", ["service", "student"])
+    rules = make_rules("account_type", "service", dominant=True)
+    out = registry.apply_suppression(
+        spec, result, rules, dimensions=("account_type",), exempt=())
+
+    row = out.data[out.data["account_type"] == "service"].iloc[0]
+    reason = row[registry.REASON_COLUMN]
+    assert not pd.isna(row["request_share"])   # 比例保留，不是 NA
+    assert "非自然人" in reason
+    assert "61.0%" in reason and "30%" in reason
+    assert len(out.suppressed) == 0            # 不進 sidecar
+    assert len(out.exempted) == 1
+    assert out.exempted[0]["維度"] == "account_type"
+    assert out.exempted[0]["分組值"] == "service"
+    assert "非自然人" in out.exempted[0]["原因"]
+
+
+def test_非自然人分組同時命中母數門檻時仍被抑制且理由只寫母數():
+    spec = make_spec(["account_type"])
+    result = make_result("account_type", ["service", "student"])
+    rules = make_rules("account_type", "service", below=True, dominant=True)
+    out = registry.apply_suppression(
+        spec, result, rules, dimensions=("account_type",), exempt=())
+
+    row = out.data[out.data["account_type"] == "service"].iloc[0]
+    reason = row[registry.REASON_COLUMN]
+    assert pd.isna(row["request_share"])       # 照舊抑制
+    assert "母數" in reason
+    assert "非自然人" not in reason            # 理由只寫母數那一條
+    assert len(out.suppressed) == 1
+    assert len(out.exempted) == 0
+
+
+def test_非自然人分組須同時登記維度與值才豁免():
+    # 「服務憑證」只登記在 unit，這裡的維度是 degree——防的是只比對值、
+    # 不比對維度的實作（會把別的維度登記的值誤判成這裡也豁免）。
+    spec = make_spec(["degree"])
+    result = make_result("degree", ["服務憑證", "M"])
+    rules = make_rules("degree", "服務憑證", dominant=True)
+    out = registry.apply_suppression(
+        spec, result, rules, dimensions=("degree",), exempt=(),
+        non_person={"unit": frozenset({"服務憑證"})})
+
+    row = out.data[out.data["degree"] == "服務憑證"].iloc[0]
+    assert pd.isna(row["request_share"])
+    assert len(out.suppressed) == 1
+    assert len(out.exempted) == 0
+
+
 def _main() -> int:
     tests = [(n, f) for n, f in sorted(globals().items())
              if n.startswith("test_") and callable(f)]

@@ -39,7 +39,7 @@ from __future__ import annotations
 import logging
 import re
 from typing import Sequence
-from collections.abc import Callable
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -68,6 +68,18 @@ class MetricResult:
     n_covered: int
     coverage: float = field(init=False)
     suppressed: list = field(default_factory=list)
+    # 明確登記為非自然人、因而**沒有**被抑制的分組（見 NON_PERSON_GROUPS）。
+    #
+    # 與 suppressed 對稱但語意相反，而且必須分開記：suppressed 的契約是
+    # 「這些格子真的被改成 NA 了」，render 層據此決定哪個 `—` 要配註腳。
+    # 把豁免塞進同一份清單，那個契約就破了——讀者會看到一句「已抑制」
+    # 配著一個完好的數字。
+    #
+    # 分開之後，版面上三種狀態才分得開：
+    #   —（抑制）        在 suppressed 裡，配「已抑制」註腳
+    #   數字＋豁免註腳   在 exempted 裡，配「依政策不抑制」註腳
+    #   數字、無註腳     兩份都不在，代表根本沒觸發規則
+    exempted: list = field(default_factory=list)
     warnings: list = field(default_factory=list)
     # 觸發抑制時要清成 NA 的欄位。None 表示依 RATIO_SUFFIXES 慣例推斷，
     # 空 list 表示「這個指標沒有需要抑制的欄位」（明確宣告，不發警告）。
@@ -211,6 +223,9 @@ REASON_COLUMN = "suppression_reason"
 # 豁免維度也要填字，不留空欄。整欄空白會被當成「這欄壞了」，
 # 寫明「為什麼這裡不抑制」才是有用的資訊。
 _EXEMPT_REASON = "依政策豁免抑制（此維度分的是請求不是人）"
+# 非自然人豁免的辨識字串。render 層靠它把「豁免」與「已抑制」分開，
+# 所以它是對外契約的一部分，改動等同改 csv 的內容——不要順手改措辭。
+_NON_PERSON_MARK = "非自然人分組"
 
 _TOTAL_ROW_NOTE = "同表彙總列未抑制，本列數值可由對照推得"
 
@@ -221,6 +236,7 @@ def apply_suppression(
     rules: pd.DataFrame,
     dimensions: Sequence[str] | None = None,
     exempt: Sequence[str] | None = None,
+    non_person: Mapping[str, Collection[str]] | None = None,
 ) -> MetricResult:
     """對宣告了 group_by 的指標套用抑制，並把理由寫進主表。
 
@@ -231,8 +247,12 @@ def apply_suppression(
     每一列另外附上 suppression_reason：被抑制的列寫原因，
     豁免維度寫豁免理由，其餘留空。
 
-    dimensions / exempt 預設取 aggregate 的兩份模組層級清單，所以 clean 的
-    呼叫端不必改；lite 那條線傳自己的進來（人層級鍵與維度都不同）。
+    dimensions / exempt / non_person 預設取 aggregate 的三份模組層級清單，
+    所以 clean 的呼叫端不必改；lite 那條線傳自己的進來（人層級鍵與維度都不同）。
+
+    non_person 只豁免 dominant 那一條：明確登記的 (維度, 值) 若**只**因為
+    單人集中度被擋，比例照常公布，理由改寫成豁免說明；若同時命中母數門檻
+    則照舊抑制，理由只寫母數那一條——見 aggregate.NON_PERSON_GROUPS。
 
     **預設是保護不是放行。** 兩份清單都沒有的維度會進抑制流程並發出警告，
     而不是安靜地豁免——理由見 aggregate.EXEMPT_DIMENSIONS 的註解。
@@ -259,6 +279,8 @@ def apply_suppression(
         aggregate.CONCENTRATION_DIMENSIONS if dimensions is None else dimensions)
     exempt_dims = tuple(
         aggregate.EXEMPT_DIMENSIONS if exempt is None else exempt)
+    non_person_groups = (
+        aggregate.NON_PERSON_GROUPS if non_person is None else non_person)
 
     for dimension in spec.group_by:
         if dimension not in result.data.columns:
@@ -319,9 +341,36 @@ def apply_suppression(
 
         flagged = applicable[applicable["below_min_group_size"]
                              | applicable["dominant"]]
+        non_person_values = non_person_groups.get(dimension, ())
         for row in flagged.itertuples():
             mask = result.data[dimension].astype(str) == str(row.分組值)
             if not mask.any():
+                continue
+
+            # 非自然人分組：只豁免 dominant，母數門檻照舊。
+            #
+            # 比對維度**與**值，不是只比對值——`dimension` 已經是這一圈的
+            # 維度，`non_person_values` 是它自己的值集合，所以同名值出現在
+            # 別的維度時查不到，會照舊走下面的抑制流程。
+            #
+            # 條件寫成「dominant 且非 below_min」而不是先扣掉 below_min：
+            # 兩條同時命中時要的是「完全照舊」，包含理由只寫母數那一條。
+            if (str(row.分組值) in non_person_values
+                    and row.dominant and not row.below_min_group_size):
+                share = 100 * float(row.top1_user_share)
+                reason = (
+                    f"{_NON_PERSON_MARK}，單一識別碼佔 {share:.1f}%"
+                    f" > {100 * config.DOMINANT_THRESHOLD:.0f}%，"
+                    "依政策不抑制（抑制保護的是自然人）")
+                for index in result.data.index[mask]:
+                    reasons_by_row.setdefault(index, []).append(
+                        f"{dimension}：{reason}")
+                result.exempted.append({
+                    "維度": dimension,
+                    "分組值": str(row.分組值),
+                    "原因": reason,
+                    "未抑制欄位": ",".join(map(str, ratio_columns)),
+                })
                 continue
             # **只記真的被改動的欄位。** 有些格子在抑制之前就是 NA——
             # 那不是「算得出來但不給看」，是「本來就沒有這個值」（例如服務憑證
@@ -351,9 +400,12 @@ def apply_suppression(
 
     # 有彙總列時據實說明抑制擋不住，只加在真的被抑制的列上——
     # 豁免列沒有東西被擋，不需要這句。
+    # 非自然人豁免同樣不算「被抑制」：那一列的數字完好，附上「抑制擋不住」
+    # 這句話會讓讀者以為它被擋過。
     suppressed_index = {
         index for index, items in reasons_by_row.items()
-        if any(item != _EXEMPT_REASON for item in items)
+        if any(item != _EXEMPT_REASON and _NON_PERSON_MARK not in item
+               for item in items)
     }
     if result.has_unsuppressed_total_row:
         for index in suppressed_index:
@@ -405,8 +457,10 @@ def load_tables() -> dict:
     }
 
 
-def dimension_lists(line: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """某條線的 (要抑制的維度, 明確豁免的維度)。
+def dimension_lists(
+    line: str,
+) -> tuple[tuple[str, ...], tuple[str, ...], Mapping[str, Collection[str]]]:
+    """某條線的 (要抑制的維度, 明確豁免的維度, 非自然人分組)。
 
     寫成查表而不是讓呼叫端自己傳：漏傳的後果是整條線的維度都被判成「未登記」，
     雖然會警告，但那是每個指標各警告一次的噪音，很容易被當成雜訊略過。
@@ -417,8 +471,10 @@ def dimension_lists(line: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
         from src import aggregate_lite
 
         return (aggregate_lite.CONCENTRATION_DIMENSIONS_LITE,
-                aggregate_lite.EXEMPT_DIMENSIONS_LITE)
-    return aggregate.CONCENTRATION_DIMENSIONS, aggregate.EXEMPT_DIMENSIONS
+                aggregate_lite.EXEMPT_DIMENSIONS_LITE,
+                aggregate_lite.NON_PERSON_GROUPS_LITE)
+    return (aggregate.CONCENTRATION_DIMENSIONS, aggregate.EXEMPT_DIMENSIONS,
+            aggregate.NON_PERSON_GROUPS)
 
 
 def run_metric(spec: MetricSpec, tables: dict, rules: pd.DataFrame) -> MetricResult:
@@ -427,9 +483,10 @@ def run_metric(spec: MetricSpec, tables: dict, rules: pd.DataFrame) -> MetricRes
         raise TypeError(
             f"指標 {spec.name} 必須回傳 MetricResult，收到 {type(result).__name__}"
         )
-    dimensions, exempt = dimension_lists(spec.line)
+    dimensions, exempt, non_person = dimension_lists(spec.line)
     return apply_suppression(spec, result, rules,
-                             dimensions=dimensions, exempt=exempt)
+                             dimensions=dimensions, exempt=exempt,
+                             non_person=non_person)
 
 
 def list_metrics(line: str | None = None) -> list[MetricSpec]:

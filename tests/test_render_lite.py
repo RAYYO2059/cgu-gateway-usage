@@ -199,9 +199,10 @@ def test_中英對照表由圖上用的字典產生():
 
 
 def test_錯位圖用計數不用佔比():
-    """服務憑證的兩個佔比欄都被抑制，而它正是錯位最大的一列。
+    """計數不依賴抑制狀態，佔比會。
 
-    畫佔比的話，要嘛把被抑制的值畫上去，要嘛把最重要的那一點拿掉。
+    服務憑證的兩個佔比欄現在因非自然人分組豁免而照常公布，但它正是錯位
+    最大的一列：畫佔比的話，這一點會隨抑制判定去留。計數不受抑制。
     """
     from src import render_figures_lite
 
@@ -248,7 +249,9 @@ def test_表頭改名不影響數值格式化():
 
 
 def test_裁欄不會弄丟抑制註腳():
-    """服務憑證那列在兩張主表都被抑制，註腳是唯一說明「為什麼這格是 —」的地方。
+    """被抑制的列，註腳是唯一說明「為什麼這格是 —」的地方。
+
+    這裡用服務憑證當合成列；實際資料中它已依非自然人分組豁免，不再被抑制。
 
     註腳的列標籤靠 spec.group_by 找，而 group_by 宣告的欄位可能不在白名單裡。
     """
@@ -401,3 +404,119 @@ def test_沒有_sidecar_時維持原行為():
     body = render_results.render_block(frame, "requests_by_unit_lite",
                                        publish_csv=False)
     assert "已抑制" in body
+
+
+def _exempted_service_run(tmp_path, monkeypatch):
+    """寫出一個含服務憑證豁免列的 run 目錄，回傳 (run_id, name, frame)。
+
+    走實際路徑：理由字串由 apply_suppression 產生、sidecar 寫進 run 目錄、
+    render_lite 從那裡讀回。任何一段自己手寫字串，都測不到契約。
+    """
+    import json
+
+    import pandas as pd
+
+    import src.metrics_lite  # noqa: F401  讓註腳的列標籤走 group_by
+    from src import aggregate_lite, config
+    from src.metrics import registry
+
+    name = "requests_by_unit_lite"
+    spec = registry.REGISTRY[name]
+    service = aggregate_lite.UNIT_SERVICE
+    result = registry.MetricResult(
+        data=pd.DataFrame({
+            "unit": [service, "教職員"],
+            "unit_type": [service, "教職員"],
+            "n_users": [82, 120],
+            "n_accounts": [15, 20],
+            "n_requests": [60075, 22524],
+            "request_share": [0.4985, 0.1869],
+            "attributable_share": [None, 0.3726],   # 不在母體，不是被抑制
+            "top1_user_share": [0.6891, 0.0993],
+            "top1_account_share": [0.6891, 0.4501],
+            "n_users_in_top_account": [1, 29],
+        }),
+        n_total=2, n_covered=2,
+        ratio_columns=["request_share", "attributable_share"])
+    rules = pd.DataFrame([{"維度": "unit", "分組值": service,
+                           "below_min_group_size": False, "dominant": True,
+                           "n_users": 82, "top1_user_share": 0.6891}])
+    out = registry.apply_suppression(
+        spec, result, rules,
+        dimensions=aggregate_lite.CONCENTRATION_DIMENSIONS_LITE,
+        exempt=aggregate_lite.EXEMPT_DIMENSIONS_LITE,
+        non_person=aggregate_lite.NON_PERSON_GROUPS_LITE)
+    assert out.suppressed == [] and len(out.exempted) == 1, (
+        "前置條件不成立：這一列沒有走豁免，下面的斷言就沒在測東西")
+
+    run_id = "t_exempted"
+    run_dir = tmp_path / run_id / "metrics_lite"
+    run_dir.mkdir(parents=True)
+    out.data.to_csv(run_dir / f"{name}.csv", index=False,
+                    encoding="utf-8-sig", lineterminator="\n")
+    (run_dir / f"{name}.exempted.json").write_text(
+        json.dumps(out.exempted, ensure_ascii=False), encoding="utf-8",
+        newline="\n")
+    monkeypatch.setattr(config, "RUNS_DIR", tmp_path)
+    return run_id, name, render_lite.load_frame(run_id, name)
+
+
+def _render_overview_block(key, run_id, frame):
+    """與 render_overview 對同一個 KEY 的呼叫完全相同。"""
+    from src import render_results
+
+    name, columns = render_lite.OVERVIEW_BLOCKS[key]
+    return render_results.render_block(
+        frame, name, data_dir=render_lite.DATA_LINK_DIR,
+        columns=columns, rename=render_lite.OVERVIEW_RENAME,
+        suppressed_cells=render_lite._suppressed_cells(run_id, name, frame),
+        exempted_cells=render_lite._exempted_cells(run_id, name, frame),
+        na_marker=render_lite.NA_MARKER)
+
+
+def test_非自然人豁免列印數字與豁免註腳且沒有破折號(tmp_path, monkeypatch):
+    """版面上三種狀態必須分得開：
+
+        —＋「已抑制」註腳     在 suppressed.json
+        數字＋豁免註腳        在 exempted.json
+        數字、無註腳          兩份都不在
+    """
+    from src import aggregate_lite, render_results
+    from src.metrics import registry
+
+    run_id, _, frame = _exempted_service_run(tmp_path, monkeypatch)
+    body = _render_overview_block("UNIT_MAIN", run_id, frame)
+    service = aggregate_lite.UNIT_SERVICE
+
+    row = [line for line in body.splitlines()
+           if line.startswith(f"| {service}")][0]
+    assert "0.4985" in row, "豁免列的比例沒有印出來"
+    assert render_results.MISSING not in body, "豁免列不該出現破折號"
+    notes = [line for line in body.splitlines() if line.startswith("※")]
+    assert len(notes) == 1, f"應該只有豁免列一條註腳，實際：{notes}"
+    assert service in notes[0]
+    assert registry._NON_PERSON_MARK in notes[0], "缺豁免註腳"
+    assert "依政策不抑制" in notes[0]
+    assert "已抑制" not in body, "完好的數字配上了「已抑制」"
+
+
+def test_沒有比例欄的表不印豁免註腳(tmp_path, monkeypatch):
+    """2.2 的 UNIT_CONCENTRATION 不含任何比例欄，豁免的格子一格都沒印出來。
+
+    豁免註腳解釋的是「這個數字為什麼沒有被擋」；表上沒有那個數字，那句話
+    就沒有指涉對象——與抑制註腳在欄位被裁掉時不印是同一條規則。
+    """
+    from src import render_results
+
+    run_id, name, frame = _exempted_service_run(tmp_path, monkeypatch)
+    _, columns = render_lite.OVERVIEW_BLOCKS["UNIT_CONCENTRATION"]
+    exempted = render_lite._exempted_cells(run_id, name, frame)
+    assert exempted, "前置條件不成立：沒有讀到 exempted.json，這個測試就沒在測東西"
+    assert not {column for _, column in exempted} & set(columns), (
+        "前置條件不成立：這張表含有豁免的欄位")
+
+    body = _render_overview_block("UNIT_CONCENTRATION", run_id, frame)
+    assert "0.6891" in body, "表本身要照常印出"
+    notes = [line for line in body.splitlines() if line.startswith("※")]
+    assert notes == [], f"沒有比例欄的表不該有任何註腳，實際：{notes}"
+    assert render_results.MISSING not in body

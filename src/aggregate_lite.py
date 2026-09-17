@@ -55,6 +55,23 @@ UNIT_TYPE_COLLEGE = "學院"
 UNIT_TYPE_STAFF = "教職員"
 UNIT_TYPE_SERVICE = "服務憑證"
 
+# 非自然人分組。語意與理由見 aggregate.NON_PERSON_GROUPS，同樣只豁免
+# dominant、不豁免 below_min_group_size。
+#
+#   unit=服務憑證          目前唯一真的會生效的一筆：requests_by_unit_lite 與
+#                          cost_by_unit_lite 都以 unit 分組，該列因 68.9% 被擋。
+#   account_type=service   **目前沒有任何指標以 account_type 分組**（lite 的
+#                          group_by 只有 unit / model_family / date_taipei），
+#                          所以這一筆現在不影響任何輸出。登記是為了日後新增
+#                          account_type 分組指標時就地生效，而不是等到那時候
+#                          才有人想起來要補。值是 identity.classify_account()
+#                          的 "service"，不是中文的「服務憑證」——兩條線共用
+#                          同一支分類函式。
+NON_PERSON_GROUPS_LITE: dict[str, frozenset[str]] = {
+    "unit": frozenset({UNIT_SERVICE}),
+    "account_type": frozenset({"service"}),
+}
+
 
 def load_registry() -> pd.DataFrame:
     """讀 ref/lite_user_registry.csv。

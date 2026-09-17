@@ -174,9 +174,22 @@ def _row_label(row: pd.Series, columns: list[str]) -> str:
     return " / ".join(str(row[c]) for c in columns)
 
 
+def _shows_any(index, displayed: list[str] | None, cells: set | None) -> bool:
+    """這一列在表上有沒有印出 cells 裡的任何一格。
+
+    displayed 或 cells 缺一就回 True：沒有 sidecar 可查時寧可多印註腳。
+    抑制與豁免兩種註腳共用這一支——兩者解釋的都是「讀者眼前那一格」，
+    那一格被裁掉時，兩種註腳同樣失去指涉對象。
+    """
+    if displayed is None or cells is None:
+        return True
+    return any((index, c) in cells for c in displayed)
+
+
 def _footnotes(frame: pd.DataFrame, name: str | None,
                displayed: list[str] | None = None,
-               suppressed_cells: set | None = None) -> list[str]:
+               suppressed_cells: set | None = None,
+               exempted_cells: set | None = None) -> list[str]:
     """把 suppression_reason 抽成表格下方的註腳。
 
     直接當一欄印會讓表寬到不能看，而且同一句話會重複幾十列。
@@ -189,26 +202,51 @@ def _footnotes(frame: pd.DataFrame, name: str | None,
     白名單把所有被抑制的欄都裁掉之後，那句話就沒有指涉對象了——讀者看到
     一整列完好的數字配一句「本列的比例已抑制」，只會以為眼前的數字被動過。
     兩者缺一（clean 那條路徑不傳 sidecar）就維持原行為，寧可多印。
+
+    非自然人豁免的註腳走同一個檢查，查的是 exempted_cells（exempted.json 的
+    「未抑制欄位」）。它解釋的是「這個數字為什麼沒有被擋」，表上沒有那個
+    數字時同樣不該出現。
     """
     if registry.REASON_COLUMN not in frame.columns:
         return []
     key_columns = _key_columns(frame, name)
     notes: list[str] = []
     for index, row in frame.iterrows():
-        if displayed is not None and suppressed_cells is not None:
-            if not any((index, c) in suppressed_cells for c in displayed):
-                continue
         value = row[registry.REASON_COLUMN]
         # 從 csv 讀回來時，未抑制的空字串會變成 float nan。
         # 不先擋掉的話 str(nan) == "nan" 是真值，會產出「已抑制：nan」的假註腳。
         if pd.isna(value):
             continue
         reason = str(value).strip()
-        # 豁免不是抑制，不需要註腳——否則 model_family 會拖著 27 條一樣的話。
-        if not reason or reason == registry._EXEMPT_REASON:
+        if not reason:
+            continue
+
+        # 一列可能同時帶多個維度的理由（group_by 宣告兩個維度時），而它們的
+        # 狀態可以不同：一個被抑制、另一個依政策豁免。所以逐段分類，不要拿
+        # 整串去比對——那會讓其中一種狀態被另一種蓋掉。
+        parts = [p for p in reason.split("；") if p.strip()]
+        suppressed_parts = [
+            p for p in parts
+            if p != registry._EXEMPT_REASON
+            and registry._NON_PERSON_MARK not in p]
+        non_person_parts = [p for p in parts
+                            if registry._NON_PERSON_MARK in p]
+
+        # 非自然人豁免：那一列的數字**印得出來**，不在 suppressed.json 裡，
+        # 所以查的是 exempted_cells。註腳的語氣也相反：解釋的是「這個數字
+        # 為什麼沒有被擋」。
+        if _shows_any(index, displayed, exempted_cells):
+            for part in non_person_parts:
+                notes.append(f"※ `{_row_label(row, key_columns)}` 列{part}")
+
+        if not _shows_any(index, displayed, suppressed_cells):
+            continue
+        # 維度層豁免不是抑制，不需要註腳——否則 model_family 會拖著 27 條一樣的話。
+        if not suppressed_parts:
             continue
         notes.append(
-            f"※ `{_row_label(row, key_columns)}` 列的比例已抑制：{reason}")
+            f"※ `{_row_label(row, key_columns)}` 列的比例已抑制："
+            f"{'；'.join(suppressed_parts)}")
     return notes
 
 
@@ -273,7 +311,8 @@ def render_table(frame: pd.DataFrame, link: str | None, name: str,
                  data_dir: str = "data", columns: list | None = None,
                  rename: dict | None = None,
                  suppressed_cells: set | None = None,
-                 na_marker: str | None = None) -> str:
+                 na_marker: str | None = None,
+                 exempted_cells: set | None = None) -> str:
     """link 控制「完整資料」那行要不要出現；name 一定是指標名，
     因為 _key_columns() 得靠它查 group_by。兩者分開傳，避免
     「不發布 csv」這個決定順手把列標籤也降級成第一欄。
@@ -294,7 +333,7 @@ def render_table(frame: pd.DataFrame, link: str | None, name: str,
     #
     # 但被抑制的欄整批被裁掉時就相反：那句話沒有任何指涉對象了。
     # displayed 傳進去讓 _footnotes 自己判斷，見那邊的說明。
-    notes = _footnotes(frame, name, display, suppressed_cells)
+    notes = _footnotes(frame, name, display, suppressed_cells, exempted_cells)
 
     mask = _annotation_mask(frame, name)
     annotation = frame[mask]
@@ -359,14 +398,16 @@ def render_block(frame: pd.DataFrame, name: str, publish_csv: bool = True,
                  data_dir: str = "data", columns: list | None = None,
                  rename: dict | None = None,
                  suppressed_cells: set | None = None,
-                 na_marker: str | None = None) -> str:
+                 na_marker: str | None = None,
+                 exempted_cells: set | None = None) -> str:
     if frame.empty:
         return "_（本次執行沒有資料）_"
     if name in DEFINITION_LIST_METRICS:
         return render_definition_list(frame, name, data_dir=data_dir)
     return render_table(frame, name if publish_csv else None, name,
                         data_dir=data_dir, columns=columns, rename=rename,
-                        suppressed_cells=suppressed_cells, na_marker=na_marker)
+                        suppressed_cells=suppressed_cells, na_marker=na_marker,
+                        exempted_cells=exempted_cells)
 
 
 # ---------------------------------------------------------------------------
