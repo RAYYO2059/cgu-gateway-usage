@@ -66,3 +66,9 @@ venv/
 # --- Cowork 輸出 ---
 # 對話端的交付檔會同步到這裡（提示詞、草稿），不是專案成品。
 /Claude outputs/
+
+# --- 代理基準文件 ---
+# CLAUDE.md 與 AGENTS.md 只存在本機，給 Claude Code 與 Codex 讀。
+# 公開的維護規則在 docs/MAINTAINING.md；兩份的舊版仍在 git 歷史裡，不改寫。
+/CLAUDE.md
+/AGENTS.md

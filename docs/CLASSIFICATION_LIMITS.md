@@ -107,6 +107,6 @@ Ray 已標的 30 群中，`batch_project` 是 **23 群**、`tool_injected` 是 *
 | repo 外 `codex_blind_2026-09/codex_judge_output.csv` | Codex 的 58 群交叉判定 | 2026-09-11 | `804f7e6f…`；`gpt-5.6-sol` |
 | repo 外 `_rescued_scratchpad/blind_label_sample.csv` | 固定 58 群分母 | 2026-09-11 | 抽樣種子 `20260911` |
 | repo 外 `_rescued_scratchpad/blind_labels.csv` | Ray 的 30 群 v1 手填結果 | 2026-09-11 | v1；`axis_level` 不使用 |
-| repo 外 `_rescued_scratchpad/clusters.parquet` 與 `cluster_members.parquet` | uid、unit_type、model 的相異種類數 | 2026-09-06 至 2026-09-10 | 聚類門檻 10；群集座標見 `AGENTS.md` |
+| repo 外 `_rescued_scratchpad/clusters.parquet` 與 `cluster_members.parquet` | uid、unit_type、model 的相異種類數 | 2026-09-06 至 2026-09-10 | 聚類門檻 10；群集座標見 `ref/annotation_protocol.md` 第一節 |
 | `runs/2026-09-05T1700_prefilter/classify_lite/prefilter_counts.csv` | 四條前置規則的相異內容與請求數 | 2026-09-05T20:12:04+08:00 | 可分類母體 `63af7d40e051d069dece9f14771eab6be7cb487f25c1937f6ff56ec12eb6919b` |
 | `src/classify_lite/summarize_classification_limits.py` | 重算 A–F 的安全聚合 | 2026-09-12 | 本檔 1.0 |

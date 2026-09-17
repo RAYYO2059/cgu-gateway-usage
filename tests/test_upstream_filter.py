@@ -207,8 +207,11 @@ def test_clean_原始檔數只能佐證本機筆數():
     assert "不證明上游未排除" in doc
 
 
-def test_三個擷取日與八個問題在公開檔和基準檔同步():
-    """只核對文件；以記憶體中的錯字突變確認斷言不是空真。"""
+def test_三個擷取日與八個問題在公開檔一致():
+    """只核對文件；以記憶體中的錯字突變確認斷言不是空真。
+
+    CLAUDE.md、AGENTS.md 已移出版控，全新 clone 讀不到，所以不再核對它們。
+    """
     doc = _doc()
 
     def check(text):
@@ -220,10 +223,6 @@ def test_三個擷取日與八個問題在公開檔和基準檔同步():
     check(doc)
     with pytest.raises(AssertionError):
         check(doc.replace("三個擷取日", "兩個擷取日"))
-    for name in ("CLAUDE.md", "AGENTS.md"):
-        baseline = (REPO / name).read_text(encoding="utf-8")
-        assert "三個擷取日" in baseline
-        assert "第六節有八個待問上游的問題" in baseline
 
 
 def test_台北日期的換算與實際相符():
