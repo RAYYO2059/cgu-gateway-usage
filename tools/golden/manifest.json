@@ -31,10 +31,10 @@
       "docs/data/users_by_degree_and_entry_year.csv": "f0fb41eee65d1ee5823991727777a9646f493f802c941a0114ff8e0c2a1105ac",
       "docs/data_lite/cost_by_day_lite.csv": "3088741e7c16cbafde92434d993c13ee5c0940efddaba0e6784c17cb47e6678d",
       "docs/data_lite/cost_by_model_family_lite.csv": "940dde8081352b2f5cfa997bccba57e3b84f14af27051d27ce1543e81b16b173",
-      "docs/data_lite/cost_by_unit_lite.csv": "8d4bae37a46cf89c9f016208166283e3aa109d56972f1e6347d847cbe26405d2",
+      "docs/data_lite/cost_by_unit_lite.csv": "c51616239824199a41eadf53dcfa23813a51c0ca7f5983e296997aa4933056e2",
       "docs/data_lite/cost_coverage_lite.csv": "756a3b949d24d768a3fc8f3f93b5afd73761490fcbebe62a8a8ea40892f6f55c",
       "docs/data_lite/cost_structure_lite.csv": "4c5482c341f3c18970137e2ce149e7c27f57de04256ac1bdcfd34bc6464df538",
-      "docs/data_lite/requests_by_unit_lite.csv": "0c14943e6ef93e97934c802d6627175d6bf4871d02fa117ecb72f7ccb26decd3",
+      "docs/data_lite/requests_by_unit_lite.csv": "3dfedbd82e4f421a71f5d72c126065186c188df1ebc3485f50ee24848076f462",
       "docs/data_lite/unit_coverage_lite.csv": "540ca0811164ba83ce7ed537519b273da2677710a13f0e76c3ccc071ad8ff9e5",
       "docs/data_lite/unmapped_dept_codes_lite.csv": "4d41e282b7dc8410438c81d664de05821bfd14569498559b5c0f84df7787fafd",
       "docs/data_lite/users_by_unit_lite.csv": "d895967b21f7f4a133f71d67a02cb6efd693a824a011050fc078388231bde006",
@@ -55,16 +55,16 @@
       },
       "docs/INDEX.md": {
         "METRICS_CLEAN": "f36b48311c12cd5963be5a1ddb7600e75d93a219022ebbc96dc64c9ae2fb04fe",
-        "METRICS_LITE": "c8c28e72912ab19f8579af368fe4f8f9be636a3fdaa7b217ae8e6197c5d4d12a",
+        "METRICS_LITE": "f641d27778e7335a9960271a1af7cef5ce3fd762f7e9cb9b0228156d0a404ca9",
         "SUPPRESSION_CLEAN": "58d6bb9303d1730640b6dbd7c1bd730c62ccc96423c2f56c12c065a973486973",
         "SUPPRESSION_LITE": "5c7e15b87005c8c8fc2cfc00f68bf735dca186e6efea5de8a59c9e02831d17e1"
       },
       "docs/OVERVIEW.md": {
         "COST_COVERAGE_MAIN": "31ddee6878c1a239f3058107ebb43afc15aa25ae398a59fc77c148a43ff17c90",
         "COST_STRUCTURE_MAIN": "27661c4136f6d95afd5f4e539461a364b4503ef7fb924b5e84bdb74982cdd264",
-        "COST_UNIT_MAIN": "566ea64e789f962a4c3df4ab83c166b63ed38970cdde12b801c1a47fcdba1d4b",
+        "COST_UNIT_MAIN": "e279b2288e20a18f75afc616f50f067a394031f7067be8ece63fa59daf3ae9d6",
         "UNIT_CONCENTRATION": "2cfe0f21b700bbbbea3d21844925de6b903859c2bbaaefeb8a620b3abb0c61a1",
-        "UNIT_MAIN": "a3de44634c90d2ea9bfce61dc59c5136aca112ba4c399f153e40f8346597db1a"
+        "UNIT_MAIN": "7edab11c801ba8b80858c42a8734a99613f67b0f3e137f857ceeec32f8514bbd"
       },
       "docs/RESULTS.md": {
         "ACCOUNT_TYPE": "aca34624a406fe77a6f59ffe9ba103216233520d0e912887163a3a41ad0acc6f",
@@ -93,20 +93,20 @@
         "COST_DAY": "ec2b9c4ffecf06cd354ad37abb7c8a698c52d80210575fef83081f7161607e46",
         "COST_MODEL": "b62f2e301287a404a9b20cbe606e623c3917314be208f6e34bcf4b9c09b00e7b",
         "COST_STRUCTURE": "afc14cb4e690ca9fdf34eee73afaa3422b214948168f831b120e84a41f7750a9",
-        "COST_UNIT": "0b51729757454cde6e03c9fbed3c5da9ed331b4cfaef395d64fb4d4084f16f9c",
+        "COST_UNIT": "ae135c425d205c965d831be787058b8e99e7e28dff652081c86859d6f065a33c",
         "GLOSSARY": "387013d60b940045e35c23cb1a76b17e2984e1d46a0a2ac1689c1e9dc2ef79ac",
-        "UNIT": "641569805af7826d10349e4be6a0b0a57827c4e25af9e6e493d8c6885808549d",
+        "UNIT": "0c9af7b3383d0c848859c4b3e31bd26aaed9a4501612ca2f9ba1618384b3c165",
         "UNIT_COVERAGE": "5e4fb70748c652ecbe5e0f59244bdd79b0af8499c86a7610a54565fc9530722c",
         "UNMAPPED": "0c16c568c1bf8526ac34c6da1196711b944ce38f97e045137abe58af9097520a",
         "USERS": "31ad91e1399ad4d8043a0aabed892f702081f2529044244c6c0fa778011cb43a"
       }
     },
     "C_docs": {
-      "README.md": "0f9b303dd90f576026a0b56152e579a1f5562880aed8cbdd3a755555ba35002f",
-      "docs/INDEX.md": "77359e71ccda384bb29e5880ff855979da3b3364654c224d0af6a39f1d6103b3",
-      "docs/OVERVIEW.md": "cf538465e7a4fb881cee464456f5262245d8a3ee338a8d2e45607229c65c5999",
+      "README.md": "5c70d20f38a4eaed3eb3e3005e7c48f78e02c5bd446c34740e0b8bbd39ac7488",
+      "docs/INDEX.md": "708237dc50ceb44b2f374c2e5c334c68c303bbe1a01d99603b113599c4019a0e",
+      "docs/OVERVIEW.md": "6c5e19bca3b395210cb4ed1d7a7fd4a5755236ccecbfba89a623aee051cff103",
       "docs/RESULTS.md": "d0e49159329b18ec56bf9bb929105eea956339c4f27e2887fce623129fbde00c",
-      "docs/RESULTS_lite.md": "bfc6e88fdaedc1d1cc54404fc9bdfd1b127434cd05d2f69bb755c56d5b3556fb"
+      "docs/RESULTS_lite.md": "cbb1d18f72b47dd0e502c73e88cfee7643ff8a9bd603893ac831a99bb828d88c"
     },
     "D_concentration": {
       "concentration.csv": "0eccb65e31afc93dc32ab494b61cf123abd2cc97aea72bfeb91b4d6a965b44f0",
@@ -140,12 +140,12 @@
       "metrics/users_by_degree_and_entry_year.suppressed.json": "bf524358771875c8eb29603365a971cf5a0f818b25deb9ac78bf9e704ecd8930",
       "metrics_lite/cost_by_day_lite.csv": "3088741e7c16cbafde92434d993c13ee5c0940efddaba0e6784c17cb47e6678d",
       "metrics_lite/cost_by_model_family_lite.csv": "940dde8081352b2f5cfa997bccba57e3b84f14af27051d27ce1543e81b16b173",
-      "metrics_lite/cost_by_unit_lite.csv": "8d4bae37a46cf89c9f016208166283e3aa109d56972f1e6347d847cbe26405d2",
-      "metrics_lite/cost_by_unit_lite.suppressed.json": "b9edc94cf96b696ea453ff687af194500428e2874207475860613f0c2085a9d2",
+      "metrics_lite/cost_by_unit_lite.csv": "c51616239824199a41eadf53dcfa23813a51c0ca7f5983e296997aa4933056e2",
+      "metrics_lite/cost_by_unit_lite.exempted.json": "e597eb688201b9241895c827d888bc7e6b0f9ffb1b6ed816cf36ae5cd4ebdc51",
       "metrics_lite/cost_coverage_lite.csv": "756a3b949d24d768a3fc8f3f93b5afd73761490fcbebe62a8a8ea40892f6f55c",
       "metrics_lite/cost_structure_lite.csv": "4c5482c341f3c18970137e2ce149e7c27f57de04256ac1bdcfd34bc6464df538",
-      "metrics_lite/requests_by_unit_lite.csv": "0c14943e6ef93e97934c802d6627175d6bf4871d02fa117ecb72f7ccb26decd3",
-      "metrics_lite/requests_by_unit_lite.suppressed.json": "515df19f24d1f7a9cf0588b7a4813a9b518e6900dda1d556d626e1ec0a062c4e",
+      "metrics_lite/requests_by_unit_lite.csv": "3dfedbd82e4f421a71f5d72c126065186c188df1ebc3485f50ee24848076f462",
+      "metrics_lite/requests_by_unit_lite.exempted.json": "15d51d1c4a97b513316c5c20313c1202cf4a5fb7542e8871d6a5bf3b63d08dc0",
       "metrics_lite/unit_coverage_lite.csv": "540ca0811164ba83ce7ed537519b273da2677710a13f0e76c3ccc071ad8ff9e5",
       "metrics_lite/unmapped_dept_codes_lite.csv": "4d41e282b7dc8410438c81d664de05821bfd14569498559b5c0f84df7787fafd",
       "metrics_lite/users_by_unit_lite.csv": "d895967b21f7f4a133f71d67a02cb6efd693a824a011050fc078388231bde006"
@@ -164,7 +164,7 @@
     },
     "H_cost_total": "2749.32",
     "I_tests": {
-      "passed": 762,
+      "passed": 773,
       "skipped": 0,
       "failed": 0,
       "skip_items": [],
@@ -367,6 +367,74 @@
         "I": {
           "old": "7273a291d90e",
           "new": "7273a291d90e"
+        }
+      }
+    },
+    {
+      "captured_at": "2026-09-17T11:11:43+08:00",
+      "initial": false,
+      "accepted": [
+        "A",
+        "B",
+        "C",
+        "E"
+      ],
+      "accept_environment": false,
+      "reason": "P0：非自然人分組豁免單人集中度抑制（保留母數門檻）",
+      "git_head": "952fc1c632fa780e18b438cd0882fe9eba4d2d9d",
+      "git_tracked_changes": false,
+      "environment": {
+        "python": "3.12.7",
+        "pandas": "2.3.1",
+        "pyarrow": "21.0.0",
+        "numpy": "2.3.1",
+        "matplotlib": "3.10.3",
+        "pandera": "0.32.1"
+      },
+      "previous_environment": {
+        "python": "3.12.7",
+        "pandas": "2.3.1",
+        "pyarrow": "21.0.0",
+        "numpy": "2.3.1",
+        "matplotlib": "3.10.3",
+        "pandera": "0.32.1"
+      },
+      "categories": {
+        "A": {
+          "old": "9d78807aaad8",
+          "new": "5f3700aa6627"
+        },
+        "B": {
+          "old": "d5daddb4f16d",
+          "new": "32f33fd709aa"
+        },
+        "C": {
+          "old": "263c742a25b0",
+          "new": "3339981b65e9"
+        },
+        "D": {
+          "old": "f95a0d992d4b",
+          "new": "f95a0d992d4b"
+        },
+        "E": {
+          "old": "c5f0802e4cf8",
+          "new": "e015bd1d4b37"
+        },
+        "F": {
+          "old": "f4c549d9afac",
+          "new": "f4c549d9afac"
+        },
+        "G": {
+          "old": "2512724b078d",
+          "new": "2512724b078d"
+        },
+        "H": {
+          "old": "348f76015693",
+          "new": "348f76015693"
+        },
+        "I": {
+          "old": "7273a291d90e",
+          "new": "6296e34e6dc3"
         }
       }
     }
